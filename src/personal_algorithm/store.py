@@ -8,7 +8,6 @@ from pathlib import Path
 
 from .models import Candidate, Interaction, RankedCandidate
 
-
 SCHEMA = """
 PRAGMA foreign_keys = ON;
 

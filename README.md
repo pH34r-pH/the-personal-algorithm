@@ -85,4 +85,4 @@ followed by browser-based onboarding.
 
 ## License
 
-License selection is intentionally left open in this initial scaffold.
+Licensed under the Apache License, Version 2.0. See [LICENSE](LICENSE).

@@ -5,7 +5,6 @@ from personal_algorithm.ranking import ReferenceRanker
 from personal_algorithm.sources import fixture_candidates
 from personal_algorithm.store import Store
 
-
 NOW = datetime(2026, 1, 1, 12, tzinfo=UTC)
 
 

@@ -1,12 +1,12 @@
 """Synthetic source used to prove the end-to-end M0 contract."""
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from ..models import Candidate
 
 
 def fixture_candidates() -> tuple[Candidate, ...]:
-    discovered = datetime(2026, 1, 1, 12, tzinfo=timezone.utc)
+    discovered = datetime(2026, 1, 1, 12, tzinfo=UTC)
     return (
         Candidate(
             id="fixture:paper-1",

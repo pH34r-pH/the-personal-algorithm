@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from math import exp
 
 from .models import (
@@ -30,7 +30,7 @@ class ReferenceRanker:
         *,
         now: datetime | None = None,
     ) -> RankedCandidate:
-        now = now or datetime.now(timezone.utc)
+        now = now or datetime.now(UTC)
         features = {
             "topic_affinity": self._topic_affinity(candidate, policy),
             "source_affinity": policy.source_affinity.get(candidate.source, 0.0),

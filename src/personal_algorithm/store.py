@@ -46,7 +46,7 @@ CREATE TABLE IF NOT EXISTS interactions (
 
 class Store:
     def __init__(self, path: str | Path = ":memory:") -> None:
-        self.connection = sqlite3.connect(str(path))
+        self.connection = sqlite3.connect(str(path), check_same_thread=False)
         self.connection.executescript(SCHEMA)
 
     def put_candidate(self, candidate: Candidate) -> None:

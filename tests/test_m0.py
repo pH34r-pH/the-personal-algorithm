@@ -1,4 +1,4 @@
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from personal_algorithm.models import Interaction, InteractionKind, Policy
 from personal_algorithm.ranking import ReferenceRanker
@@ -6,7 +6,7 @@ from personal_algorithm.sources import fixture_candidates
 from personal_algorithm.store import Store
 
 
-NOW = datetime(2026, 1, 1, 12, tzinfo=timezone.utc)
+NOW = datetime(2026, 1, 1, 12, tzinfo=UTC)
 
 
 def test_reference_ranker_is_deterministic_and_explained():

@@ -23,7 +23,7 @@ def _datetime(value: Any, key: str) -> datetime:
     if not isinstance(value, str):
         raise ValidationError(f"{key} must be an ISO-8601 datetime")
     try:
-        result = datetime.fromisoformat(value.replace("Z", "+00:00"))
+        result = datetime.fromisoformat(value)
     except ValueError as exc:
         raise ValidationError(f"{key} must be an ISO-8601 datetime") from exc
     if result.tzinfo is None:

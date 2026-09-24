@@ -13,9 +13,9 @@ from .bootstrap import BootstrapCoordinator
 from .connections import ConnectionStore
 from .connections_api import create_connections_router
 from .github_auth import GitHubAuthorization
-from .oauth_state import DurableAuthorizationStateStore
 from .github_provider import GitHubProvider
 from .instance_auth import InstanceAuth
+from .oauth_state import DurableAuthorizationStateStore
 from .private_api import protect
 from .provider_registry import ProviderRegistry
 from .store import Store

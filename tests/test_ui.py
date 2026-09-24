@@ -7,7 +7,12 @@ from personal_algorithm.connections import ConnectionStore
 from personal_algorithm.instance_auth import InstanceAuth
 from personal_algorithm.private_api import protect
 from personal_algorithm.provider_registry import ProviderRegistry
-from personal_algorithm.providers import Connection, ConnectionStatus, ProviderCapability, ProviderDescriptor
+from personal_algorithm.providers import (
+    Connection,
+    ConnectionStatus,
+    ProviderCapability,
+    ProviderDescriptor,
+)
 from personal_algorithm.store import Store
 from personal_algorithm.ui import create_ui_router
 

@@ -1,5 +1,7 @@
 targetScope = 'resourceGroup'
 param location string = resourceGroup().location
+@minLength(3)
+@maxLength(18)
 param namePrefix string
 param image string
 @secure()

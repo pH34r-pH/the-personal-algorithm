@@ -25,9 +25,14 @@ resource storage 'Microsoft.Storage/storageAccounts@2023-05-01' = {
   kind: 'StorageV2'
   properties: { allowBlobPublicAccess: false, minimumTlsVersion: 'TLS1_2', supportsHttpsTrafficOnly: true }
 }
-resource share 'Microsoft.Storage/storageAccounts/fileServices/shares@2023-05-01' = {
+resource fileService 'Microsoft.Storage/storageAccounts/fileServices@2023-05-01' = {
   parent: storage
-  name: 'default/tpa-state'
+  name: 'default'
+}
+
+resource share 'Microsoft.Storage/storageAccounts/fileServices/shares@2023-05-01' = {
+  parent: fileService
+  name: 'tpa-state'
   properties: { shareQuota: 5 }
 }
 resource vault 'Microsoft.KeyVault/vaults@2023-07-01' = {

@@ -13,6 +13,7 @@ dependencies = ["fastapi>=0.115,<1", "feedparser>=6.0,<7", "httpx>=0.27,<1", "uv
 
 [project.scripts]
 personal-algorithm-demo = "personal_algorithm.demo:main"
+personal-algorithm-ingest = "personal_algorithm.cli:main"
 
 [project.optional-dependencies]
 dev = ["httpx>=0.27", "pytest>=8.0", "ruff>=0.6"]

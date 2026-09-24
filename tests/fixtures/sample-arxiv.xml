@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<feed xmlns="http://www.w3.org/2005/Atom"
+      xmlns:arxiv="http://arxiv.org/schemas/atom">
+  <id>https://arxiv.org/api/test</id>
+  <title>ArXiv Query: search_query=all:recommendation</title>
+  <updated>2026-09-23T12:00:00Z</updated>
+  <entry>
+    <id>http://arxiv.org/abs/2609.12345v1</id>
+    <updated>2026-09-23T11:00:00Z</updated>
+    <published>2026-09-23T11:00:00Z</published>
+    <title>Transparent Personal Recommendation Systems</title>
+    <summary>We study recommendation policies controlled by individual users.</summary>
+    <author><name>Ada Example</name></author>
+    <author><name>Grace Fixture</name></author>
+    <link href="https://arxiv.org/abs/2609.12345v1" rel="alternate" type="text/html"/>
+    <category term="cs.IR"/>
+    <category term="cs.HC"/>
+    <arxiv:primary_category term="cs.IR"/>
+  </entry>
+</feed>

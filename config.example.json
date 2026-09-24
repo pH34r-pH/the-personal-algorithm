@@ -1,0 +1,21 @@
+{
+  "database": "data/personal-algorithm.sqlite3",
+  "feeds": [
+    "https://example.com/feed.xml"
+  ],
+  "policy": {
+    "version": "example-v1",
+    "weights": {
+      "topic_affinity": 0.6,
+      "source_affinity": 0.1,
+      "recency": 0.3
+    },
+    "topic_affinity": {
+      "research": 1.0,
+      "programming": 0.8
+    },
+    "source_affinity": {
+      "rss": 0.5
+    }
+  }
+}

@@ -7,18 +7,18 @@ from datetime import UTC, datetime
 
 from .models import Candidate, Policy, RankedCandidate
 from .ranking import ReferenceRanker
-from .sources.rss import fetch_feed
+from .source_config import SourceConfig, acquire
 from .store import Store
 
-FeedFetcher = Callable[[str], tuple[Candidate, ...]]
+SourceFetcher = Callable[[SourceConfig], tuple[Candidate, ...]]
 
 
-def ingest_feeds(
-    feed_urls: Iterable[str],
+def ingest_sources(
+    sources: Iterable[SourceConfig],
     *,
     policy: Policy,
     store: Store,
-    fetcher: FeedFetcher = fetch_feed,
+    fetcher: SourceFetcher = acquire,
     now: datetime | None = None,
 ) -> tuple[RankedCandidate, ...]:
     """Fetch, persist, rank, and return candidates across configured feeds.
@@ -30,8 +30,8 @@ def ingest_feeds(
     ranker = ReferenceRanker()
     candidates: dict[str, Candidate] = {}
 
-    for url in feed_urls:
-        for candidate in fetcher(url):
+    for source in sources:
+        for candidate in fetcher(source):
             candidates[candidate.id] = candidate
 
     ranked: list[RankedCandidate] = []
@@ -43,3 +43,17 @@ def ingest_feeds(
 
     ranked.sort(key=lambda item: (-item.score, item.candidate.id))
     return tuple(ranked)
+
+
+# Compatibility helper for the first M1 RSS-only API.
+def ingest_feeds(feed_urls, *, policy, store, fetcher=None, now=None):
+    from .source_config import RssSource
+
+    sources = tuple(RssSource(url=url) for url in feed_urls)
+    if fetcher is None:
+        return ingest_sources(sources, policy=policy, store=store, now=now)
+
+    def adapted(source):
+        return fetcher(source.url)
+
+    return ingest_sources(sources, policy=policy, store=store, fetcher=adapted, now=now)

@@ -12,9 +12,10 @@ from .azure_credentials import AzureKeyVaultCredentialStore
 from .bootstrap import BootstrapCoordinator
 from .connections import ConnectionStore
 from .connections_api import create_connections_router
-from .github_auth import AuthorizationStateStore, GitHubAuthorization
+from .github_auth import GitHubAuthorization
 from .github_provider import GitHubProvider
 from .instance_auth import InstanceAuth
+from .oauth_state import DurableAuthorizationStateStore
 from .private_api import protect
 from .provider_registry import ProviderRegistry
 from .store import Store
@@ -66,7 +67,7 @@ def create_private_app(
         client_id=settings.github_client_id,
         client_secret=settings.github_client_secret,
         credentials=credential_store,
-        states=AuthorizationStateStore(),
+        states=DurableAuthorizationStateStore(store),
         http=oauth_http,
         provider=github,
     )

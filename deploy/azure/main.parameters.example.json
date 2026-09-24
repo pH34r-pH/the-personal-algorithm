@@ -1,0 +1,1 @@
+{"$schema":"https://schema.management.azure.com/schemas/2019-04-01/deploymentParameters.json#","contentVersion":"1.0.0.0","parameters":{"namePrefix":{"value":"personal-algorithm"},"image":{"value":"ghcr.io/OWNER/the-personal-algorithm:TAG"},"ownerSubject":{"value":"REPLACE_WITH_STABLE_OWNER_SUBJECT"},"githubClientId":{"value":"REPLACE_WITH_GITHUB_CLIENT_ID"}}}

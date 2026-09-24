@@ -19,17 +19,8 @@ def connect_github(
     if not access_token:
         raise ValueError("GitHub access token must not be empty")
 
-    # Validate before committing credential material to the store.
-    temporary_ref = "memory://github-connect"
-    validating = provider
-    if validating is None:
-        class _OneTokenStore:
-            def get(self, ref: str) -> str:
-                return access_token
-
-        validating = GitHubProvider(_OneTokenStore())  # type: ignore[arg-type]
-
-    identity = validating.identity(temporary_ref)
+    validating = provider or GitHubProvider(credentials)
+    identity = validating.identity_with_token(access_token)
     credential_ref = credentials.put("github", identity["id"], access_token)
     return Connection(
         provider_id="github",

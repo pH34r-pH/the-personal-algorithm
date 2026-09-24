@@ -30,7 +30,7 @@ class ApplicationSettings:
     github_client_secret: str
 
     @classmethod
-    def from_env(cls) -> "ApplicationSettings":
+    def from_env(cls) -> ApplicationSettings:
         required = {
             "database": os.getenv("TPA_DATABASE", "data/personal-algorithm.sqlite3"),
             "owner_subject": os.getenv("TPA_OWNER_SUBJECT", ""),

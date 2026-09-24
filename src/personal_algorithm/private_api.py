@@ -7,7 +7,17 @@ from fastapi import APIRouter, Depends
 from .instance_auth import InstanceAuth
 
 
+def owner_dependencies(auth: InstanceAuth) -> list:
+    """Dependencies to supply when including a private router.
+
+    FastAPI snapshots router dependencies when routes are created, so mutating
+    an existing router's dependency list does not retroactively protect them.
+    """
+    return [Depends(auth.dependency())]
+
+
 def protect(router: APIRouter, auth: InstanceAuth) -> APIRouter:
-    """Require the configured owner identity for every route on a router."""
-    router.dependencies.append(Depends(auth.dependency()))
-    return router
+    """Return a wrapper router that mounts the target behind owner auth."""
+    wrapper = APIRouter(dependencies=owner_dependencies(auth))
+    wrapper.include_router(router)
+    return wrapper

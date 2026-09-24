@@ -23,7 +23,8 @@ def test_example_shaped_config_loads(tmp_path):
     )
 
     config = load_config(path)
-    assert config.feeds == ("https://example.invalid/feed.xml",)
+    assert len(config.sources) == 1
+    assert config.sources[0].url == "https://example.invalid/feed.xml"
     assert config.policy.weights == {"recency": 1.0}
     assert config.database == "data/test.sqlite3"
 

@@ -1,10 +1,18 @@
 {
   "database": "data/personal-algorithm.sqlite3",
-  "feeds": [
-    "https://example.com/feed.xml"
+  "sources": [
+    {
+      "type": "rss",
+      "url": "https://example.com/feed.xml"
+    },
+    {
+      "type": "arxiv",
+      "query": "cat:cs.IR AND all:personalization",
+      "max_results": 25
+    }
   ],
   "policy": {
-    "version": "example-v1",
+    "version": "example-v2",
     "weights": {
       "topic_affinity": 0.6,
       "source_affinity": 0.1,
@@ -12,10 +20,12 @@
     },
     "topic_affinity": {
       "research": 1.0,
+      "cs.IR": 0.9,
       "programming": 0.8
     },
     "source_affinity": {
-      "rss": 0.5
+      "rss": 0.5,
+      "arxiv": 0.7
     }
   }
 }

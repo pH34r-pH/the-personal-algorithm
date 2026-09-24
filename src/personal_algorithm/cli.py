@@ -7,7 +7,7 @@ import json
 from pathlib import Path
 
 from .config import load_config
-from .ingest import ingest_feeds
+from .ingest import ingest_sources
 from .serialization import ranked_to_dict
 from .store import Store
 
@@ -17,7 +17,7 @@ def run(config_path: str) -> list[dict]:
     database = Path(config.database)
     database.parent.mkdir(parents=True, exist_ok=True)
     store = Store(database)
-    ranked = ingest_feeds(config.feeds, policy=config.policy, store=store)
+    ranked = ingest_sources(config.sources, policy=config.policy, store=store)
     return [ranked_to_dict(item) for item in ranked]
 
 

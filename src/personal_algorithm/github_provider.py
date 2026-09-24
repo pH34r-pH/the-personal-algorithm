@@ -54,6 +54,9 @@ class GitHubProvider:
 
     def identity(self, credential_ref: str) -> dict[str, Any]:
         token = self.credentials.get(credential_ref)
+        return self.identity_with_token(token)
+
+    def identity_with_token(self, token: str) -> dict[str, Any]:
         response = self.client.get("/user", headers=self._auth(token))
         response.raise_for_status()
         user = response.json()

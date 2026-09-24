@@ -10,7 +10,7 @@ param githubClientId string
 param githubClientSecretName string = 'github-client-secret'
 param targetPort int = 8000
 
-var storageName = take(replace('${namePrefix}state', '-', ''), 24)
+var storageName = take(toLower('${namePrefix}state${uniqueString(resourceGroup().id)}'), 24)
 var vaultName = take('${namePrefix}-kv', 24)
 var envName = '${namePrefix}-env'
 var appName = '${namePrefix}-app'

@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<feed xmlns="http://www.w3.org/2005/Atom">
+  <title>Personal Algorithm Atom Fixture</title>
+  <id>https://example.invalid/atom</id>
+  <updated>2026-09-23T12:00:00Z</updated>
+  <entry>
+    <title>Open feeds as candidate sources</title>
+    <id>urn:uuid:feed-entry-1</id>
+    <updated>2026-09-23T11:30:00Z</updated>
+    <link href="https://example.invalid/atom/open-feeds"/>
+    <author><name>Fixture Author</name></author>
+    <category term="rss"/>
+    <summary>Atom should emit the same Candidate contract as RSS.</summary>
+  </entry>
+</feed>

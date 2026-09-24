@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<rss version="2.0">
+  <channel>
+    <title>Personal Algorithm Test Feed</title>
+    <link>https://example.invalid/</link>
+    <description>Synthetic RSS fixture</description>
+    <item>
+      <title>Transparent personal recommenders</title>
+      <link>https://example.invalid/posts/recommenders</link>
+      <guid>post-1</guid>
+      <pubDate>Tue, 23 Sep 2026 12:00:00 GMT</pubDate>
+      <author>researcher@example.invalid</author>
+      <category>recommenders</category>
+      <category>personal-data</category>
+      <description>A fixture about owning the ranking policy.</description>
+    </item>
+    <item>
+      <title>Strange hardware</title>
+      <link>https://example.invalid/posts/hardware</link>
+      <guid>post-2</guid>
+      <pubDate>Mon, 22 Sep 2026 12:00:00 GMT</pubDate>
+      <category>hardware</category>
+    </item>
+  </channel>
+</rss>

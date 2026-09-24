@@ -25,13 +25,14 @@ def query_url(
         raise ValueError("arXiv search query must not be empty")
     if start < 0 or not 1 <= max_results <= 100:
         raise ValueError("arXiv pagination must use start >= 0 and 1 <= max_results <= 100")
-    return f"{ARXIV_API}?{urlencode({
-        'search_query': search_query,
-        'start': start,
-        'max_results': max_results,
-        'sortBy': sort_by,
-        'sortOrder': sort_order,
-    })}"
+    parameters = {
+        "search_query": search_query,
+        "start": start,
+        "max_results": max_results,
+        "sortBy": sort_by,
+        "sortOrder": sort_order,
+    }
+    return f"{ARXIV_API}?{urlencode(parameters)}"
 
 
 def parse_arxiv(

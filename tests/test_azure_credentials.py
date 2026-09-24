@@ -55,6 +55,6 @@ def test_account_identity_changes_secret_name_without_exposing_identity():
     "url",
     ["http://fixture.vault.azure.net", "https://example.com", "not-a-url"],
 )
-def test_rejects_non_key-vault_urls(url):
+def test_rejects_non_key_vault_urls(url):
     with pytest.raises(ValueError):
         AzureKeyVaultCredentialStore(url, client=FakeSecretClient())

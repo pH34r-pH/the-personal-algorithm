@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
+import time
 from pathlib import Path
 
 from .models import Candidate, Interaction, RankedCandidate
@@ -44,10 +45,22 @@ CREATE TABLE IF NOT EXISTS interactions (
 """
 
 
+def _initialize_schema(connection: sqlite3.Connection, *, attempts: int = 8) -> None:
+    connection.execute("PRAGMA busy_timeout = 30000")
+    for attempt in range(attempts):
+        try:
+            connection.executescript(SCHEMA)
+            return
+        except sqlite3.OperationalError as exc:
+            if "locked" not in str(exc).lower() or attempt == attempts - 1:
+                raise
+            time.sleep(min(0.25 * (attempt + 1), 2.0))
+
+
 class Store:
     def __init__(self, path: str | Path = ":memory:") -> None:
-        self.connection = sqlite3.connect(str(path), check_same_thread=False)
-        self.connection.executescript(SCHEMA)
+        self.connection = sqlite3.connect(str(path), timeout=30.0, check_same_thread=False)
+        _initialize_schema(self.connection)
 
     def put_candidate(self, candidate: Candidate) -> None:
         payload = {

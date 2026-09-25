@@ -97,25 +97,32 @@ def create_private_app(
     @app.get("/", response_class=HTMLResponse)
     def landing() -> str:
         return """<!doctype html><html lang="en"><head><meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1"><title>ph34r.dev · Projects</title>
+<meta name="viewport" content="width=device-width,initial-scale=1"><title>The Personal Algorithm</title>
 <style>
-:root{color-scheme:dark;font-family:Inter,ui-sans-serif,system-ui,sans-serif}*{box-sizing:border-box}
-body{margin:0;min-height:100vh;background:#090b10;color:#f5f3ec}main{width:min(1180px,calc(100% - 40px));margin:auto;padding:64px 0 96px}
-header{display:flex;justify-content:space-between;align-items:end;margin-bottom:48px}.mark{font:600 .74rem ui-monospace,monospace;letter-spacing:.16em;color:#aab2c0}
-h1{font-size:clamp(3rem,8vw,6.6rem);line-height:.9;letter-spacing:-.065em;margin:.15em 0}.intro{max-width:610px;color:#9ea6b5;line-height:1.6}
-.gallery{display:grid;grid-template-columns:repeat(auto-fit,minmax(320px,1fr));gap:18px}.tile{position:relative;overflow:hidden;min-height:480px;border:1px solid #252a34;border-radius:28px;background:#10131a}
-.demo{position:absolute;inset:0;padding:26px;display:grid;grid-template-columns:1.2fr .8fr;grid-template-rows:80px 1fr 110px;gap:12px;opacity:.75}
-.box{border:1px solid #343b49;border-radius:18px;background:#171b24}.wide{grid-column:1/-1}.tall{grid-row:2}.stack{display:grid;gap:12px}.glass{position:absolute;inset:0;display:flex;flex-direction:column;justify-content:flex-end;padding:34px;background:linear-gradient(180deg,rgba(13,16,23,.28),rgba(13,16,23,.78));backdrop-filter:blur(18px);-webkit-backdrop-filter:blur(18px);border:1px solid rgba(255,255,255,.07)}
-.lock{width:44px;height:44px;border:1px solid rgba(255,255,255,.25);border-radius:50%;display:grid;place-items:center;margin-bottom:22px;font-size:20px}
-.eyebrow{font:600 .68rem ui-monospace,monospace;letter-spacing:.15em;color:#a8ff78}.tile h2{font-size:clamp(2.3rem,5vw,4rem);line-height:.94;letter-spacing:-.055em;margin:.2em 0}.tile p{max-width:520px;color:#c0c5ce;line-height:1.55}
-.enter{display:inline-block;margin-top:16px;color:#f4ffe9;text-decoration:none;border-bottom:1px solid #a8ff78;width:max-content;padding-bottom:4px}
-@media(max-width:600px){main{width:min(100% - 24px,1180px);padding-top:36px}.tile{min-height:440px}}
-</style></head><body><main><header><div><div class="mark">PH34R.DEV / SIDE PROJECTS</div><h1>Things under construction.</h1></div></header>
-<p class="intro">Small systems for exploring ownership, agency, computation, and the odd corners where software meets the physical world.</p>
-<section class="gallery"><article class="tile"><div class="demo"><div class="box wide"></div><div class="box tall"></div><div class="stack"><div class="box"></div><div class="box"></div><div class="box"></div></div><div class="box wide"></div></div>
-<div class="glass"><div class="lock">⌁</div><div class="eyebrow">PRIVATE INSTANCE · PROJECT 01</div><h2>The Personal<br>Algorithm</h2>
-<p>Your feeds. Your history. Your objectives. A self-hosted experiment in taking ownership of recommendation and discovery.</p>
-<a class="enter" href="/app/">Enter my personal algorithm →</a></div></article></section></main></body></html>"""
+:root{color-scheme:dark;font-family:Georgia,serif}*{box-sizing:border-box}body{margin:0;background:#f0eadc;color:#171717}
+main{width:min(760px,calc(100% - 28px));margin:auto;padding:38px 0 90px}header{border-bottom:3px double #171717;padding-bottom:20px;margin-bottom:34px}
+.kicker,.meta,.action{font-family:ui-monospace,monospace}.kicker{font-size:.72rem;letter-spacing:.13em;text-transform:uppercase}
+h1{font-size:clamp(2.7rem,8vw,5.5rem);line-height:.88;letter-spacing:-.055em;margin:.2em 0}.lede{font-size:1.12rem;line-height:1.55;max-width:650px}
+nav{display:flex;gap:18px;flex-wrap:wrap;margin-top:20px;font-family:ui-monospace,monospace;font-size:.82rem}a{color:inherit}
+.feed{display:grid;gap:30px}.unit{background:#fffdf6;border:1px solid #171717;box-shadow:5px 5px 0 #171717}
+.content{padding:22px}.meta{font-size:.7rem;text-transform:uppercase;letter-spacing:.08em;color:#62605a}.unit h2{font-size:1.65rem;margin:.35em 0}.unit p{line-height:1.55}
+.preview{height:150px;border:1px solid #b9b4a8;background:repeating-linear-gradient(135deg,#ded8cb,#ded8cb 14px,#eae5da 14px,#eae5da 28px);display:grid;place-items:center;font:700 .72rem ui-monospace,monospace;letter-spacing:.12em;color:#6d685f}
+.actions{border-top:1px solid #171717;display:grid;grid-template-columns:repeat(4,1fr);font-family:ui-monospace,monospace}
+.action{border:0;border-right:1px solid #171717;background:#f8f3e8;padding:12px 8px;text-align:center;font-size:.74rem}.action:last-child{border-right:0}.publish{background:#171717;color:#f8f3e8}
+.note{margin-top:36px;border-top:1px dotted #171717;padding-top:18px;font-size:.9rem;line-height:1.55}
+@media(max-width:560px){.actions{grid-template-columns:1fr 1fr}.action:nth-child(2){border-right:0}.action:nth-child(-n+2){border-bottom:1px solid #171717}}
+</style></head><body><main><header><div class="kicker">A small personal web · curated by an algorithm, governed by a person</div>
+<h1>The Personal<br>Algorithm</h1>
+<p class="lede">A self-hosted feed that learns what deserves your attention without owning it. The private algorithm gathers and ranks; this public page is what its owner deliberately chooses to publish.</p>
+<nav><a href="/app/">open my private algorithm ↗</a><a href="#feed">published feed ↓</a></nav></header>
+<section class="feed" id="feed">
+<article class="unit"><div class="content"><div class="meta">video · example published item</div><div class="preview">MEDIA PREVIEW</div><h2>A thing worth passing along</h2><p>Each unit can be a video, link, paper, image, note, or other candidate surfaced by the private algorithm. Publication is an explicit human choice.</p></div>
+<div class="actions"><button class="action">🙂 react</button><button class="action">↗ share</button><button class="action">☆ save</button><button class="action publish">↑ publish</button></div></article>
+<article class="unit"><div class="content"><div class="meta">link · example published item</div><h2>The feed is a garden, not a firehose.</h2><p>Web 1.0 ownership with useful Web 2.0 affordances: durable pages and links, plus lightweight reactions, sharing, bookmarks, and deliberate promotion from private discovery to public curation.</p></div>
+<div class="actions"><button class="action">✨ react</button><button class="action">↗ share</button><button class="action">★ saved</button><button class="action publish">↑ publish</button></div></article>
+</section>
+<p class="note"><strong>Public by choice.</strong> React, share, and save are ordinary reader actions. Publish is different: it is an owner action that promotes a selected item from the private Personal Algorithm into this public feed.</p>
+</main></body></html>"""
 
     @app.get("/health")
     def health() -> dict[str, str]:

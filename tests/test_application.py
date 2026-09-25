@@ -101,6 +101,8 @@ def test_public_landing_describes_project_without_auth(tmp_path):
     assert "The Personal" in response.text
     assert "Algorithm" in response.text
     assert "published feed" in response.text
+    assert "Top 8" in response.text
+    assert "pinned by the owner" in response.text
     assert "react" in response.text
     assert "share" in response.text
     assert "save" in response.text

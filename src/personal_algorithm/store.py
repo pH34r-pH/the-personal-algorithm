@@ -3,9 +3,13 @@
 from __future__ import annotations
 
 import json
+import os
+import shutil
 import sqlite3
+import tempfile
 import time
 from pathlib import Path
+from typing import Any
 
 from .models import Candidate, Interaction, RankedCandidate
 
@@ -57,10 +61,66 @@ def _initialize_schema(connection: sqlite3.Connection, *, attempts: int = 8) -> 
             time.sleep(min(0.25 * (attempt + 1), 2.0))
 
 
+def _restore_snapshot(database: Path, snapshot: Path | None) -> None:
+    if snapshot is None or not snapshot.exists():
+        return
+    database.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copyfile(snapshot, database)
+
+
+class _DurableConnection:
+    def __init__(self, connection: sqlite3.Connection, snapshot: Path | None) -> None:
+        self._connection = connection
+        self._snapshot = snapshot
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self._connection, name)
+
+    def commit(self) -> None:
+        self._connection.commit()
+        if self._snapshot is not None:
+            self._write_snapshot()
+
+    def rollback(self) -> None:
+        self._connection.rollback()
+
+    def _write_snapshot(self) -> None:
+        snapshot = self._snapshot
+        assert snapshot is not None
+        snapshot.parent.mkdir(parents=True, exist_ok=True)
+
+        fd, local_name = tempfile.mkstemp(prefix="personal-algorithm-", suffix=".sqlite3")
+        os.close(fd)
+        local_copy = Path(local_name)
+        remote_tmp = snapshot.with_suffix(snapshot.suffix + ".tmp")
+        try:
+            backup = sqlite3.connect(str(local_copy))
+            try:
+                self._connection.backup(backup)
+                backup.commit()
+            finally:
+                backup.close()
+            shutil.copyfile(local_copy, remote_tmp)
+            os.replace(remote_tmp, snapshot)
+        finally:
+            local_copy.unlink(missing_ok=True)
+            remote_tmp.unlink(missing_ok=True)
+
+
 class Store:
-    def __init__(self, path: str | Path = ":memory:") -> None:
-        self.connection = sqlite3.connect(str(path), timeout=30.0, check_same_thread=False)
-        _initialize_schema(self.connection)
+    def __init__(
+        self,
+        path: str | Path = ":memory:",
+        *,
+        snapshot_path: str | Path | None = None,
+    ) -> None:
+        database_path = Path(path) if str(path) != ":memory:" else None
+        snapshot = Path(snapshot_path) if snapshot_path else None
+        if database_path is not None:
+            _restore_snapshot(database_path, snapshot)
+        raw_connection = sqlite3.connect(str(path), timeout=30.0, check_same_thread=False)
+        _initialize_schema(raw_connection)
+        self.connection = _DurableConnection(raw_connection, snapshot)
 
     def put_candidate(self, candidate: Candidate) -> None:
         payload = {

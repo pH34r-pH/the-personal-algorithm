@@ -30,6 +30,7 @@ class ApplicationSettings:
     key_vault_url: str
     github_client_id: str
     github_client_secret: str
+    database_snapshot: str | None = None
 
     @classmethod
     def from_env(cls) -> ApplicationSettings:
@@ -43,7 +44,7 @@ class ApplicationSettings:
         missing = [name for name, value in required.items() if not value]
         if missing:
             raise RuntimeError(f"missing application settings: {', '.join(missing)}")
-        return cls(**required)
+        return cls(**required, database_snapshot=os.getenv("TPA_DATABASE_SNAPSHOT"))
 
 
 def create_private_app(
@@ -55,7 +56,7 @@ def create_private_app(
 ) -> FastAPI:
     database_path = Path(settings.database)
     database_path.parent.mkdir(parents=True, exist_ok=True)
-    store = Store(database_path)
+    store = Store(database_path, snapshot_path=settings.database_snapshot)
     connection_store = ConnectionStore(store)
     bootstrap = BootstrapCoordinator(store)
 

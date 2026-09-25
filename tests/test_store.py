@@ -44,3 +44,18 @@ def test_initialize_schema_does_not_hide_other_sqlite_errors(monkeypatch):
         assert "disk I/O error" in str(exc)
     else:
         raise AssertionError("expected OperationalError")
+
+
+def test_commit_writes_atomic_snapshot_and_restore_uses_it(tmp_path):
+    live = tmp_path / "live.sqlite3"
+    snapshot = tmp_path / "persistent" / "state.sqlite3"
+    first = store_module.Store(live, snapshot_path=snapshot)
+    first.connection.execute("CREATE TABLE durable_probe (value TEXT NOT NULL)")
+    first.connection.execute("INSERT INTO durable_probe(value) VALUES ('kept')")
+    first.connection.commit()
+
+    assert snapshot.exists()
+
+    restored = store_module.Store(tmp_path / "restored.sqlite3", snapshot_path=snapshot)
+    row = restored.connection.execute("SELECT value FROM durable_probe").fetchone()
+    assert row == ("kept",)

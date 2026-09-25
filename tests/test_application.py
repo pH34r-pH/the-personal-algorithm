@@ -100,7 +100,11 @@ def test_public_landing_describes_project_without_auth(tmp_path):
     assert response.status_code == 200
     assert "The Personal" in response.text
     assert "Algorithm" in response.text
-    assert "SIDE PROJECTS" in response.text
+    assert "published feed" in response.text
+    assert "react" in response.text
+    assert "share" in response.text
+    assert "save" in response.text
+    assert "publish" in response.text
     assert 'href="/app/"' in response.text
 
 

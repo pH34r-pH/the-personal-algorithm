@@ -22,7 +22,7 @@
       "phases":["build","test","package"],
       "platforms":[{"os":"linux","arch":"amd64","abi":"glibc"}],
       "tools":{
-        "docker":{"sources":["Dockerfile",".github/workflows/ci.yml",".github/workflows/publish-container.yml"],"notes":"Requires an explicitly authorized usable build engine, not merely a client binary. Public CI builds and smokes packaged imports without network, root, credentials or publishing. Registry authority remains separate."},
+        "docker":{"sources":["Dockerfile",".github/workflows/ci.yml",".github/workflows/publish-container.yml"],"notes":"Requires an explicitly authorized usable build engine, not merely a client binary. Public CI builds without publishing; the subsequent packaged-import smoke disables network and runs as the image's non-root user. Registry authority remains separate."},
         "jq":{"sources":[".github/workflows/publish-container.yml"]}
       },
       "entrypoints":["docker build -t personal-algorithm:local ."],

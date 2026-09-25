@@ -11,8 +11,11 @@ permissions:
 jobs:
   test:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
@@ -20,3 +23,14 @@ jobs:
       - run: pip install -e ".[dev]"
       - run: ruff check .
       - run: pytest -q
+      - name: Require the hosted build engine before packaging
+        run: docker info --format '{{.OSType}}' | grep -x linux
+      - name: Build the source-owned container without publishing
+        run: docker build --tag personal-algorithm:ci .
+      - name: Smoke the packaged imports as the image's non-root user
+        run: |
+          timeout 30s docker run --rm --network none --read-only \
+            --cap-drop ALL --security-opt no-new-privileges \
+            --env PYTHONDONTWRITEBYTECODE=1 \
+            personal-algorithm:ci \
+            python -I -c 'import os; assert os.geteuid() != 0; import personal_algorithm.application; print("packaged imports ready; non-root; no network")'

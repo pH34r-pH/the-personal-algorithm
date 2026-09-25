@@ -1,0 +1,39 @@
+{
+  "schemaVersion": 1,
+  "repository": "pH34r-pH/the-personal-algorithm",
+  "manifests": [
+    {"path":"pyproject.toml","kind":"python-project"},
+    {"path":"Dockerfile","kind":"build"},
+    {"path":".github/workflows/ci.yml","kind":"workflow"},
+    {"path":".github/workflows/publish-container.yml","kind":"workflow"}
+  ],
+  "profiles": {
+    "python-tests": {
+      "phases":["test"],
+      "platforms":[{"os":"linux","arch":"amd64","abi":"glibc"}],
+      "tools":{
+        "python":{"sources":["pyproject.toml",".github/workflows/ci.yml"]},
+        "pip":{"sources":[".github/workflows/ci.yml"]}
+      },
+      "entrypoints":["ruff check .","pytest -q"],
+      "notes":"Use native dev extras and workflow runtime. No browser dependency is inferred from the existence of a web UI."
+    },
+    "container-package": {
+      "phases":["build","test","package"],
+      "platforms":[{"os":"linux","arch":"amd64","abi":"glibc"}],
+      "tools":{
+        "docker":{"sources":["Dockerfile",".github/workflows/ci.yml",".github/workflows/publish-container.yml"],"notes":"Requires an explicitly authorized usable build engine, not merely a client binary. Public CI builds without publishing; the subsequent packaged-import smoke disables network and runs as the image's non-root user. Registry authority remains separate."},
+        "jq":{"sources":[".github/workflows/publish-container.yml"]}
+      },
+      "entrypoints":["docker build -t personal-algorithm:local ."],
+      "notes":"The Dockerfile owns image/runtime selection. This declaration never grants Docker socket access or publishing permissions. The import smoke is packaging evidence, not production authentication or persistent-data qualification."
+    },
+    "application-runtime": {
+      "phases":["runtime"],
+      "platforms":[{"os":"linux","arch":"amd64","abi":"glibc"}],
+      "tools":{"python":{"sources":["pyproject.toml","Dockerfile"]}},
+      "entrypoints":[],
+      "notes":"Application secrets, owner data and durable /data storage are private deployment bindings, not source build prerequisites."
+    }
+  }
+}

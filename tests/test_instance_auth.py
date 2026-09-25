@@ -27,7 +27,7 @@ def test_private_route_rejects_other_identity():
     client = _client()
     response = client.get(
         "/private/hello",
-        headers={"x-ms-client-principal-id": "someone-else"},
+        headers={"x-ms-client-principal-name": "someone-else"},
     )
     assert response.status_code == 403
 
@@ -36,7 +36,7 @@ def test_private_route_accepts_owner():
     client = _client()
     response = client.get(
         "/private/hello",
-        headers={"x-ms-client-principal-id": "owner-123"},
+        headers={"x-ms-client-principal-name": "owner-123"},
     )
     assert response.status_code == 200
     assert response.json() == {"ok": True}

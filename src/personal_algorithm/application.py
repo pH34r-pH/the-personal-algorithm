@@ -26,6 +26,7 @@ from .ui import create_ui_router
 @dataclass(frozen=True, slots=True)
 class ApplicationSettings:
     database: str
+    database_snapshot: str | None
     owner_subject: str
     key_vault_url: str
     github_client_id: str
@@ -35,6 +36,7 @@ class ApplicationSettings:
     def from_env(cls) -> ApplicationSettings:
         required = {
             "database": os.getenv("TPA_DATABASE", "data/personal-algorithm.sqlite3"),
+            "database_snapshot": os.getenv("TPA_DATABASE_SNAPSHOT"),
             "owner_subject": os.getenv("TPA_OWNER_SUBJECT", ""),
             "key_vault_url": os.getenv("TPA_KEY_VAULT_URL", ""),
             "github_client_id": os.getenv("TPA_GITHUB_CLIENT_ID", ""),
@@ -55,7 +57,7 @@ def create_private_app(
 ) -> FastAPI:
     database_path = Path(settings.database)
     database_path.parent.mkdir(parents=True, exist_ok=True)
-    store = Store(database_path)
+    store = Store(database_path, snapshot_path=settings.database_snapshot)
     connection_store = ConnectionStore(store)
     bootstrap = BootstrapCoordinator(store)
 

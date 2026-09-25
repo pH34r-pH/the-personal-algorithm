@@ -2,40 +2,32 @@
 
 The Personal Algorithm is a single-owner private application by default.
 
-The application does not implement passwords. Hosted deployments should use an identity-aware reverse proxy/platform authentication layer and pass a **verified** stable subject identifier to the application.
+Hosted Azure deployments delegate **authentication** to Azure Container Apps built-in authentication (Easy Auth) with Microsoft Entra ID. The application performs only the second, deliberately small **authorization** check: the verified Entra principal ID must equal the configured owner principal ID.
 
-The application then performs the second check: only the configured owner subject may access private routes.
+## Azure trust boundary
 
-## Trust boundary
-
-The default application header is:
+Production uses the platform-provided header:
 
 ```text
-X-Personal-Algorithm-Subject
+X-MS-CLIENT-PRINCIPAL-ID
 ```
 
-That header is trustworthy **only if the public deployment prevents clients from supplying it directly** and the fronting identity layer strips/replaces inbound copies.
+Azure Container Apps authentication runs before application code and supplies the authenticated principal metadata to the container. Public ingress must be configured to require authentication; the application must not be deployed as a publicly anonymous service while relying on this header.
 
-Never expose the application directly to the Internet while trusting this header.
-
-## Azure direction
-
-For the reference Azure deployment, use Azure-hosted authentication/reverse-proxy functionality to authenticate the user and translate the verified platform identity into the application's owner-subject boundary. The precise Azure resource choice belongs in deployment IaC, not core ranking code.
-
-The owner subject should be a stable provider identifier rather than an email address where possible.
+`TPA_OWNER_SUBJECT` is the owner's stable Entra principal/object ID.
 
 ## Local development
 
-Tests and local development may inject the identity header directly. That is a development convenience, not an authentication mechanism.
+Tests may construct `InstanceAuth` with a different `identity_header` when direct header injection is useful. This is a development/testing convenience, not the production authentication mechanism.
+
+## Separation from provider OAuth
+
+Entra authentication answers **who may use this Personal Algorithm instance**.
+
+GitHub OAuth/App credentials answer **which GitHub account/data the instance may access**.
+
+These are independent trust boundaries.
 
 ## Scope
 
-This milestone protects private routes. It does not yet implement:
-
-- multiple users;
-- delegated administration;
-- sessions/passwords inside the application;
-- public sharing;
-- anonymous feed access.
-
-Those are intentionally outside the single-owner product model.
+This milestone protects private routes. It intentionally does not implement passwords, multiple owners, delegated administration, or public sharing inside the application.

@@ -1,9 +1,4 @@
-"""Single-owner instance authentication boundary.
-
-Hosted deployments should place a trusted identity-aware proxy in front of the
-application and pass a verified identity header. The app allowlists exactly
-which identity may access private routes.
-"""
+"""Single-owner authorization behind a trusted hosting authentication layer."""
 
 from __future__ import annotations
 
@@ -15,7 +10,7 @@ from fastapi import Header, HTTPException
 @dataclass(frozen=True, slots=True)
 class InstanceAuth:
     owner_subject: str
-    identity_header: str = "x-personal-algorithm-subject"
+    identity_header: str = "x-ms-client-principal-id"
 
     def __post_init__(self) -> None:
         if not self.owner_subject.strip():
@@ -25,10 +20,7 @@ class InstanceAuth:
         expected = self.owner_subject
 
         def require_owner(
-            subject: str | None = Header(
-                default=None,
-                alias=self.identity_header,
-            ),
+            subject: str | None = Header(default=None, alias=self.identity_header),
         ) -> str:
             if subject is None:
                 raise HTTPException(status_code=401, detail="authentication required")

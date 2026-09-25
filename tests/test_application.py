@@ -65,7 +65,7 @@ def test_health_is_public_but_private_app_requires_owner(tmp_path):
 
 def test_owner_sees_shared_provider_registry_in_api_and_ui(tmp_path):
     client = _client(tmp_path)
-    headers = {"x-ms-client-principal-id": "owner"}
+    headers = {"x-ms-client-principal-name": "owner"}
 
     api = client.get("/connections", headers=headers)
     assert api.status_code == 200

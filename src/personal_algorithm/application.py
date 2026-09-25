@@ -26,17 +26,16 @@ from .ui import create_ui_router
 @dataclass(frozen=True, slots=True)
 class ApplicationSettings:
     database: str
-    database_snapshot: str | None
     owner_subject: str
     key_vault_url: str
     github_client_id: str
     github_client_secret: str
+    database_snapshot: str | None = None
 
     @classmethod
     def from_env(cls) -> ApplicationSettings:
         required = {
             "database": os.getenv("TPA_DATABASE", "data/personal-algorithm.sqlite3"),
-            "database_snapshot": os.getenv("TPA_DATABASE_SNAPSHOT"),
             "owner_subject": os.getenv("TPA_OWNER_SUBJECT", ""),
             "key_vault_url": os.getenv("TPA_KEY_VAULT_URL", ""),
             "github_client_id": os.getenv("TPA_GITHUB_CLIENT_ID", ""),
@@ -45,7 +44,7 @@ class ApplicationSettings:
         missing = [name for name, value in required.items() if not value]
         if missing:
             raise RuntimeError(f"missing application settings: {', '.join(missing)}")
-        return cls(**required)
+        return cls(**required, database_snapshot=os.getenv("TPA_DATABASE_SNAPSHOT"))
 
 
 def create_private_app(

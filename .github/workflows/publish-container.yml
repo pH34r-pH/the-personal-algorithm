@@ -35,9 +35,12 @@ jobs:
           test -n "$digest"
           echo "Published immutable image: $digest" >> "$GITHUB_STEP_SUMMARY"
           printf '%s\n' "$digest" > container-image.txt
+          jq -n --arg image "$digest" --arg sha "$SHA" '{schemaVersion:1,image:$image,sourceSha:$sha,repository:"pH34r-pH/the-personal-algorithm"}' > container-image.json
       - name: Retain image receipt
         uses: actions/upload-artifact@v4
         with:
           name: personal-algorithm-container-${{ github.run_id }}
-          path: container-image.txt
+          path: |
+            container-image.txt
+            container-image.json
           retention-days: 30

@@ -16,17 +16,17 @@
         "pip":{"sources":[".github/workflows/ci.yml"]}
       },
       "entrypoints":["ruff check .","pytest -q"],
-      "notes":"Use the native dev extras and workflow runtime. No browser dependency is inferred from the existence of a web UI."
+      "notes":"Use native dev extras and workflow runtime. No browser dependency is inferred from the existence of a web UI."
     },
     "container-package": {
-      "phases":["build","package"],
+      "phases":["build","test","package"],
       "platforms":[{"os":"linux","arch":"amd64","abi":"glibc"}],
       "tools":{
-        "docker":{"sources":["Dockerfile",".github/workflows/publish-container.yml"],"notes":"Requires an explicitly authorized usable build engine, not merely a client binary. Registry publishing credentials are a separate protected binding."},
+        "docker":{"sources":["Dockerfile",".github/workflows/ci.yml",".github/workflows/publish-container.yml"],"notes":"Requires an explicitly authorized usable build engine, not merely a client binary. Public CI builds and smokes packaged imports without network, root, credentials or publishing. Registry authority remains separate."},
         "jq":{"sources":[".github/workflows/publish-container.yml"]}
       },
       "entrypoints":["docker build -t personal-algorithm:local ."],
-      "notes":"The Dockerfile owns image/runtime selection. Declaring this capability never grants Docker socket access or publishing permissions."
+      "notes":"The Dockerfile owns image/runtime selection. This declaration never grants Docker socket access or publishing permissions. The import smoke is packaging evidence, not production authentication or persistent-data qualification."
     },
     "application-runtime": {
       "phases":["runtime"],

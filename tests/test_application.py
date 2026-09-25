@@ -92,3 +92,24 @@ def test_settings_require_private_identity_and_provider_configuration(monkeypatc
         assert "key_vault_url" in str(exc)
     else:
         raise AssertionError("missing private application settings were accepted")
+
+
+def test_public_landing_describes_project_without_auth(tmp_path):
+    client = _client(tmp_path)
+    response = client.get("/")
+    assert response.status_code == 200
+    assert "The Personal" in response.text
+    assert "Algorithm" in response.text
+    assert "published feed" in response.text
+    assert "Top 8" in response.text
+    assert "pinned by the owner" in response.text
+    assert "react" in response.text
+    assert "share" in response.text
+    assert "save" in response.text
+    assert "publish" in response.text
+    assert 'href="/app/"' in response.text
+
+
+def test_private_app_still_requires_identity(tmp_path):
+    client = _client(tmp_path)
+    assert client.get("/app/").status_code == 401

@@ -39,7 +39,7 @@ def _client(connected=False):
     app = FastAPI()
     app.include_router(protect(
         create_ui_router(registry=registry, connections=connections),
-        InstanceAuth(owner_subject="owner"),
+        InstanceAuth(owner_object_id="owner"),
     ), prefix="/app")
     return TestClient(app)
 
@@ -49,7 +49,7 @@ def test_ui_is_private():
 
 
 def test_connections_page_offers_github_connect():
-    response = _client().get("/app/connections", headers={"x-ms-client-principal-name": "owner"})
+    response = _client().get("/app/connections", headers={"x-ms-client-principal-id": "owner"})
     assert response.status_code == 200
     assert "Connect GitHub" in response.text
     assert "Bootstrap history" not in response.text
@@ -57,7 +57,7 @@ def test_connections_page_offers_github_connect():
 
 def test_connected_account_offers_explicit_bootstrap():
     response = _client(connected=True).get(
-        "/app/connections", headers={"x-ms-client-principal-name": "owner"}
+        "/app/connections", headers={"x-ms-client-principal-id": "owner"}
     )
     assert "Connected as fixture" in response.text
     assert "Bootstrap history" in response.text

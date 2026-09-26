@@ -10,15 +10,15 @@ from fastapi import Header, HTTPException, Request
 
 @dataclass(frozen=True, slots=True)
 class InstanceAuth:
-    owner_subject: str
-    identity_header: str = "x-ms-client-principal-name"
+    owner_object_id: str
+    identity_header: str = "x-ms-client-principal-id"
 
     def __post_init__(self) -> None:
-        if not self.owner_subject.strip():
-            raise ValueError("owner_subject must not be empty")
+        if not self.owner_object_id.strip():
+            raise ValueError("owner_object_id must not be empty")
 
     def dependency(self, *, redirect_unauthenticated: bool = False):
-        expected = self.owner_subject.strip().casefold()
+        expected = self.owner_object_id.strip().casefold()
 
         def require_owner(
             request: Request,

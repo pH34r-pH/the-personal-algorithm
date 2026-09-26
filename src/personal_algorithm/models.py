@@ -46,6 +46,18 @@ class Candidate:
 
 
 @dataclass(frozen=True, slots=True)
+class PersonalEvent:
+    id: str
+    source: str
+    event_type: str
+    occurred_at: datetime | None = None
+    subject: str | None = None
+    canonical_url: str | None = None
+    payload: dict[str, Any] = field(default_factory=dict)
+    provenance: dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass(frozen=True, slots=True)
 class ScoreContribution:
     feature: str
     value: float

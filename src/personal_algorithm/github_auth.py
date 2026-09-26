@@ -77,6 +77,7 @@ class GitHubAuthorization:
             {
                 "client_id": self.client_id,
                 "redirect_uri": redirect_uri,
+                "scope": "read:user",
                 "state": state,
             }
         )

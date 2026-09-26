@@ -1,4 +1,5 @@
 from pathlib import Path
+from urllib.parse import parse_qs, urlparse
 
 import httpx
 from fastapi.testclient import TestClient
@@ -42,6 +43,7 @@ def _client(tmp_path: Path) -> TestClient:
         key_vault_url="https://unused.vault.azure.net",
         github_client_id="client-id",
         github_client_secret="client-secret",
+        archive_dir=str(tmp_path / "archives"),
     )
     return TestClient(
         create_private_app(
@@ -52,7 +54,8 @@ def _client(tmp_path: Path) -> TestClient:
                 transport=httpx.MockTransport(_github),
             ),
             oauth_http=httpx.Client(transport=httpx.MockTransport(_oauth)),
-        )
+        ),
+        base_url="https://testserver",
     )
 
 
@@ -125,3 +128,29 @@ def test_private_ui_redirect_preserves_requested_path(tmp_path):
     assert response.headers["location"] == (
         "/.auth/login/aad?post_login_redirect_uri=%2Fapp%2Fconnections%3Ffrom%3Dhome"
     )
+
+
+
+def test_github_connect_builds_callback_and_returns_to_onboarding(tmp_path):
+    client = _client(tmp_path)
+    headers = {"x-ms-client-principal-id": "owner-id"}
+
+    started = client.get(
+        "/connections/github/connect",
+        headers=headers,
+        follow_redirects=False,
+    )
+    assert started.status_code == 307
+    params = parse_qs(urlparse(started.headers["location"]).query)
+    assert params["redirect_uri"] == [
+        "https://testserver/connections/github/callback"
+    ]
+    state = params["state"][0]
+
+    completed = client.get(
+        f"/connections/github/callback?code=code&state={state}",
+        headers=headers,
+        follow_redirects=False,
+    )
+    assert completed.status_code == 303
+    assert completed.headers["location"] == "/app/onboarding?bootstrap=github"

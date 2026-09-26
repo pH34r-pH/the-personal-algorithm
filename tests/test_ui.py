@@ -52,7 +52,7 @@ def test_connections_page_offers_github_connect():
     response = _client().get("/app/connections", headers={"x-ms-client-principal-id": "owner"})
     assert response.status_code == 200
     assert "Connect GitHub" in response.text
-    assert "Bootstrap history" not in response.text
+    assert "Import history" not in response.text
 
 
 def test_connected_account_offers_explicit_bootstrap():
@@ -60,6 +60,18 @@ def test_connected_account_offers_explicit_bootstrap():
         "/app/connections", headers={"x-ms-client-principal-id": "owner"}
     )
     assert "Connected as fixture" in response.text
-    assert "Bootstrap history" in response.text
+    assert "Import history" in response.text
     assert "continuous" in response.text
-    assert "separate choices" in response.text
+
+
+
+def test_onboarding_prioritizes_high_yield_sources():
+    response = _client().get(
+        "/app/onboarding",
+        headers={"x-ms-client-principal-id": "owner"},
+    )
+    assert response.status_code == 200
+    assert "Google Takeout" in response.text
+    assert "Lifetime listening" in response.text
+    assert "Connect GitHub" in response.text
+    assert "Store selected files" in response.text

@@ -1,6 +1,8 @@
 import sqlite3
+from datetime import UTC, datetime
 
 import personal_algorithm.store as store_module
+from personal_algorithm.models import PersonalEvent
 
 
 class LockedThenReady:
@@ -59,3 +61,29 @@ def test_commit_writes_atomic_snapshot_and_restore_uses_it(tmp_path):
     restored = store_module.Store(tmp_path / "restored.sqlite3", snapshot_path=snapshot)
     row = restored.connection.execute("SELECT value FROM durable_probe").fetchone()
     assert row == ("kept",)
+
+
+
+def test_personal_events_are_upserted_without_becoming_candidates():
+    store = store_module.Store()
+    event = PersonalEvent(
+        id="spotify:stream:1",
+        source="spotify",
+        event_type="stream",
+        occurred_at=datetime(2026, 1, 2, 3, 4, tzinfo=UTC),
+        subject="Example Track",
+        canonical_url="spotify:track:example",
+        payload={"ms_played": 12345},
+        provenance={"archive_sha256": "abc", "member": "history.json", "index": 1},
+    )
+
+    store.put_personal_event(event)
+    store.put_personal_event(event)
+
+    assert store.count_personal_events() == 1
+    assert store.connection.execute("SELECT COUNT(*) FROM candidates").fetchone()[0] == 0
+    row = store.connection.execute(
+        "SELECT source, event_type, subject FROM personal_events WHERE id = ?",
+        (event.id,),
+    ).fetchone()
+    assert row == ("spotify", "stream", "Example Track")

@@ -24,3 +24,16 @@ Failed jobs retain the previous successful checkpoint. Retrying policy and cance
 ## Separation from continuous sync
 
 Completing a bootstrap does not enable continuous synchronization. A future Connections UI should present those as separate controls.
+
+
+## Archive-first bootstrap
+
+Provider OAuth is not the only bootstrap path. When a platform's downloadable archive contains materially more historical information than its API, the preferred flow is:
+
+1. request the archive once through the provider;
+2. upload one or more resulting files to the private archive inbox;
+3. retain the raw archive content-addressed outside SQLite;
+4. inspect and fingerprint it immediately;
+5. run provider-specific resumable parsers into the neutral PersonalEvent store.
+
+This preserves source data while allowing parsers and ranking policy to evolve independently.

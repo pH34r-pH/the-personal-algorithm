@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import asdict
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import RedirectResponse
 
 from .bootstrap import BootstrapCoordinator
@@ -45,12 +45,13 @@ def create_connections_router(
         return {"providers": providers}
 
     @router.get("/github/connect")
-    def github_connect(redirect_uri: str):
+    def github_connect(request: Request):
         if github_auth is None:
             raise HTTPException(status_code=503, detail="GitHub authorization is not configured")
+        redirect_uri = str(request.url_for("github_callback"))
         return RedirectResponse(github_auth.begin(redirect_uri))
 
-    @router.get("/github/callback")
+    @router.get("/github/callback", name="github_callback")
     def github_callback(code: str, state: str):
         if github_auth is None:
             raise HTTPException(status_code=503, detail="GitHub authorization is not configured")
@@ -59,11 +60,7 @@ def create_connections_router(
         except Exception as exc:
             raise HTTPException(status_code=400, detail="GitHub authorization failed") from exc
         connections.put(connection)
-        return {
-            "provider": "github",
-            "connected": True,
-            "account_label": connection.account_label,
-        }
+        return RedirectResponse("/app/onboarding?bootstrap=github", status_code=303)
 
     @router.post("/{provider_id}/bootstrap", status_code=201)
     def start_bootstrap(provider_id: str):

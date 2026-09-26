@@ -11,7 +11,7 @@ import time
 from pathlib import Path
 from typing import Any
 
-from .models import Candidate, Interaction, RankedCandidate
+from .models import Candidate, Interaction, PersonalEvent, RankedCandidate
 
 SCHEMA = """
 PRAGMA foreign_keys = ON;
@@ -27,6 +27,23 @@ CREATE TABLE IF NOT EXISTS candidates (
     payload_json TEXT NOT NULL,
     UNIQUE(source, source_id)
 );
+
+CREATE TABLE IF NOT EXISTS personal_events (
+    id TEXT PRIMARY KEY,
+    source TEXT NOT NULL,
+    event_type TEXT NOT NULL,
+    occurred_at TEXT,
+    subject TEXT,
+    canonical_url TEXT,
+    payload_json TEXT NOT NULL,
+    provenance_json TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_personal_events_source_type
+ON personal_events(source, event_type);
+
+CREATE INDEX IF NOT EXISTS idx_personal_events_occurred_at
+ON personal_events(occurred_at);
 
 CREATE TABLE IF NOT EXISTS rankings (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -153,6 +170,38 @@ class Store:
             ),
         )
         self.connection.commit()
+
+    def put_personal_event(self, event: PersonalEvent) -> None:
+        self.connection.execute(
+            """INSERT INTO personal_events
+               (id, source, event_type, occurred_at, subject, canonical_url,
+                payload_json, provenance_json)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+               ON CONFLICT(id) DO UPDATE SET
+                 source=excluded.source,
+                 event_type=excluded.event_type,
+                 occurred_at=excluded.occurred_at,
+                 subject=excluded.subject,
+                 canonical_url=excluded.canonical_url,
+                 payload_json=excluded.payload_json,
+                 provenance_json=excluded.provenance_json""",
+            (
+                event.id,
+                event.source,
+                event.event_type,
+                event.occurred_at.isoformat() if event.occurred_at else None,
+                event.subject,
+                event.canonical_url,
+                json.dumps(event.payload, sort_keys=True),
+                json.dumps(event.provenance, sort_keys=True),
+            ),
+        )
+        self.connection.commit()
+
+    def count_personal_events(self) -> int:
+        return int(
+            self.connection.execute("SELECT COUNT(*) FROM personal_events").fetchone()[0]
+        )
 
     def put_ranking(self, ranked: RankedCandidate) -> None:
         explanation = {

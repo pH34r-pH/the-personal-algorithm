@@ -7,7 +7,6 @@ from html import escape
 from fastapi import APIRouter
 from fastapi.responses import HTMLResponse
 
-from .archives import ArchiveInbox
 from .connections import ConnectionStore
 from .provider_registry import ProviderRegistry
 from .providers import ProviderCapability
@@ -60,7 +59,7 @@ def create_ui_router(
     *,
     registry: ProviderRegistry,
     connections: ConnectionStore,
-    archives: ArchiveInbox | None = None,
+    archives=None,
     personal_event_count=None,
 ) -> APIRouter:
     router = APIRouter()
@@ -187,7 +186,7 @@ def create_ui_router(
     return router
 
 
-def _archive_rows(archives: ArchiveInbox | None) -> str:
+def _archive_rows(archives) -> str:
     if archives is None:
         return '<p class="muted">Archive storage is not configured.</p>'
     records = archives.list()

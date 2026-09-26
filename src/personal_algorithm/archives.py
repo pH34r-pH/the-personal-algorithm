@@ -133,6 +133,37 @@ class ArchiveInbox:
             manifest=json.loads(row[7]),
         )
 
+    def path_for(self, record: ArchiveRecord) -> Path:
+        path = (self.root / record.relative_path).resolve()
+        root = self.root.resolve()
+        if path != root and root not in path.parents:
+            raise ValueError("archive path escaped configured root")
+        return path
+
+    def mark_status(
+        self,
+        sha256: str,
+        status: str,
+        *,
+        import_summary: dict | None = None,
+    ) -> ArchiveRecord:
+        record = self.get(sha256)
+        if record is None:
+            raise KeyError(f"unknown archive: {sha256}")
+        manifest = dict(record.manifest)
+        if import_summary is not None:
+            manifest["import_summary"] = import_summary
+        self.store.connection.execute(
+            """UPDATE archive_uploads
+               SET status = ?, manifest_json = ?
+               WHERE sha256 = ?""",
+            (status, json.dumps(manifest, sort_keys=True), sha256),
+        )
+        self.store.connection.commit()
+        updated = self.get(sha256)
+        assert updated is not None
+        return updated
+
     def list(self) -> tuple[ArchiveRecord, ...]:
         rows = self.store.connection.execute(
             """SELECT sha256, filename, provider_hint, detected_provider,

@@ -33,4 +33,4 @@ The current template references the GitHub client secret from Key Vault during C
 
 Key Vault networking is initially public-endpoint enabled; private networking is a later hardening step.
 
-Authentication is intentionally not guessed in this first template. Container Apps supports built-in authentication, but the exact identity provider/app registration and verified-header mapping must be reviewed against the application's owner-subject contract before public exposure.
+Authentication is intentionally not guessed in this first template. Container Apps supports built-in authentication, but the exact identity provider/app registration and verified-header mapping must be reviewed against the application's immutable owner-object-ID contract before public exposure.

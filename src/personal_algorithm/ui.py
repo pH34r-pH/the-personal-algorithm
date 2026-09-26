@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable
 from html import escape
 
 from fastapi import APIRouter
@@ -62,7 +61,7 @@ def create_ui_router(
     registry: ProviderRegistry,
     connections: ConnectionStore,
     archives: ArchiveInbox | None = None,
-    personal_event_count: Callable[[], int] | None = None,
+    personal_event_count=None,
 ) -> APIRouter:
     router = APIRouter()
 

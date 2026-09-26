@@ -38,7 +38,7 @@ def _oauth(request):
 def _client(tmp_path: Path) -> TestClient:
     settings = ApplicationSettings(
         database=str(tmp_path / "state.sqlite3"),
-        owner_subject="owner",
+        owner_object_id="owner-id",
         key_vault_url="https://unused.vault.azure.net",
         github_client_id="client-id",
         github_client_secret="client-secret",
@@ -64,7 +64,7 @@ def test_health_is_public_but_private_api_requires_owner(tmp_path):
 
 def test_owner_sees_shared_provider_registry_in_api_and_ui(tmp_path):
     client = _client(tmp_path)
-    headers = {"x-ms-client-principal-name": "owner"}
+    headers = {"x-ms-client-principal-id": "owner-id"}
 
     api = client.get("/connections", headers=headers)
     assert api.status_code == 200
@@ -77,7 +77,7 @@ def test_owner_sees_shared_provider_registry_in_api_and_ui(tmp_path):
 
 def test_settings_require_private_identity_and_provider_configuration(monkeypatch):
     for name in (
-        "TPA_OWNER_SUBJECT",
+        "TPA_OWNER_OBJECT_ID",
         "TPA_KEY_VAULT_URL",
         "TPA_GITHUB_CLIENT_ID",
         "TPA_GITHUB_CLIENT_SECRET",
@@ -87,7 +87,7 @@ def test_settings_require_private_identity_and_provider_configuration(monkeypatc
     try:
         ApplicationSettings.from_env()
     except RuntimeError as exc:
-        assert "owner_subject" in str(exc)
+        assert "owner_object_id" in str(exc)
         assert "key_vault_url" in str(exc)
     else:
         raise AssertionError("missing private application settings were accepted")

@@ -2,7 +2,7 @@
 
 The Personal Algorithm is a single-owner private application by default.
 
-Hosted Azure deployments delegate **authentication** to Azure Container Apps built-in authentication (Easy Auth) with Microsoft Entra ID. The application performs only the second, deliberately small **authorization** check: the verified Entra principal name must equal the configured owner principal name.
+Hosted Azure deployments delegate **authentication** to Azure Container Apps built-in authentication (Easy Auth) with Microsoft Entra ID. The application performs only the second, deliberately small **authorization** check: the verified Entra principal object ID must equal the configured owner object ID.
 
 ## Azure trust boundary
 
@@ -12,9 +12,11 @@ Production uses the platform-provided header:
 X-MS-CLIENT-PRINCIPAL-ID
 ```
 
-Azure Container Apps authentication runs before application code and supplies the authenticated principal metadata to the container. Public ingress must be configured to require authentication; the application must not be deployed as a publicly anonymous service while relying on this header.
+Azure Container Apps authentication supplies authenticated principal metadata to the container. The public root and health endpoint may remain anonymous, while private UI routes send unauthenticated browser requests through `/.auth/login/aad` and private API routes fail closed with 401/403.
 
-`TPA_OWNER_SUBJECT` is the owner's stable Entra principal name.
+The hosting layer must keep `X-MS-CLIENT-PRINCIPAL-ID` platform-controlled so an external caller cannot spoof it.
+
+`TPA_OWNER_OBJECT_ID` is the owner's immutable Microsoft Entra directory object ID. Use this instead of an email address, UPN, or display name because those identifiers can change while the directory object remains the same.
 
 ## Local development
 

@@ -172,7 +172,25 @@ class Store:
         self.connection.commit()
 
     def put_personal_event(self, event: PersonalEvent) -> None:
-        self.connection.execute(
+        self.put_personal_events((event,))
+
+    def put_personal_events(self, events) -> int:
+        rows = [
+            (
+                event.id,
+                event.source,
+                event.event_type,
+                event.occurred_at.isoformat() if event.occurred_at else None,
+                event.subject,
+                event.canonical_url,
+                json.dumps(event.payload, sort_keys=True),
+                json.dumps(event.provenance, sort_keys=True),
+            )
+            for event in events
+        ]
+        if not rows:
+            return 0
+        self.connection.executemany(
             """INSERT INTO personal_events
                (id, source, event_type, occurred_at, subject, canonical_url,
                 payload_json, provenance_json)
@@ -185,18 +203,10 @@ class Store:
                  canonical_url=excluded.canonical_url,
                  payload_json=excluded.payload_json,
                  provenance_json=excluded.provenance_json""",
-            (
-                event.id,
-                event.source,
-                event.event_type,
-                event.occurred_at.isoformat() if event.occurred_at else None,
-                event.subject,
-                event.canonical_url,
-                json.dumps(event.payload, sort_keys=True),
-                json.dumps(event.provenance, sort_keys=True),
-            ),
+            rows,
         )
         self.connection.commit()
+        return len(rows)
 
     def count_personal_events(self) -> int:
         return int(

@@ -197,11 +197,25 @@ def _archive_rows(archives) -> str:
     rows = []
     for record in records:
         provider = record.detected_provider or record.provider_hint or "unknown"
+        summary = record.manifest.get("import_summary") or {}
+        imported = summary.get("events_written")
+        if record.status == "imported":
+            state = f'imported · {imported or 0} events'
+            action = '<span class="status">ready</span>'
+        elif provider == "spotify":
+            state = record.status
+            action = (
+                f'<button class="button" data-import-archive="{escape(record.sha256)}">'
+                "Import Spotify history</button>"
+            )
+        else:
+            state = record.status
+            action = '<span class="muted">parser pending</span>'
         rows.append(
             f'<div class="archive-row"><div><strong>{escape(record.filename)}</strong>'
             f'<span>{escape(provider)} · {_format_bytes(record.size_bytes)} · '
-            f'{record.manifest.get("members", 1)} members</span></div>'
-            f'<code>{record.sha256[:12]}</code></div>'
+            f'{record.manifest.get("members", 1)} members · {escape(state)}</span></div>'
+            f'<div class="archive-actions"><code>{record.sha256[:12]}</code>{action}</div></div>'
         )
     return "".join(rows)
 
@@ -248,9 +262,40 @@ document.querySelector("#upload")?.addEventListener("click", async () => {
       status.textContent = file.name + ": " + detail;
       return;
     }
+    const stored = await response.json();
+    if (stored.detected_provider === "spotify" || stored.provider_hint === "spotify") {
+      status.textContent = "Importing Spotify lifetime history…";
+      const imported = await fetch("/archives/" + stored.sha256 + "/import", {method:"POST"});
+      if (!imported.ok) {
+        let detail = "Spotify import failed";
+        try { detail = (await imported.json()).detail || detail; } catch {}
+        status.textContent = detail + " — the raw archive is safely retained.";
+        return;
+      }
+      const result = await imported.json();
+      status.textContent = "Spotify import complete · " + result.summary.events_written + " events retained.";
+    }
   }
-  status.textContent = "Stored " + files.length + " file" + (files.length === 1 ? "" : "s") + ". Reloading…";
-  location.reload();
+  status.textContent = status.textContent || ("Stored " + files.length + " file" + (files.length === 1 ? "" : "s") + ".");
+  setTimeout(() => location.reload(), 700);
+});
+document.querySelectorAll("[data-import-archive]").forEach(button => {
+  button.addEventListener("click", async () => {
+    button.disabled = true;
+    const status = document.querySelector("#upload-status");
+    status.textContent = "Importing Spotify lifetime history…";
+    const response = await fetch("/archives/" + button.dataset.importArchive + "/import", {method:"POST"});
+    if (!response.ok) {
+      let detail = "Spotify import failed";
+      try { detail = (await response.json()).detail || detail; } catch {}
+      status.textContent = detail;
+      button.disabled = false;
+      return;
+    }
+    const result = await response.json();
+    status.textContent = "Spotify import complete · " + result.summary.events_written + " events retained.";
+    setTimeout(() => location.reload(), 700);
+  });
 });
 const auto = new URLSearchParams(location.search).get("bootstrap");
 if (auto) runBootstrap(auto);
@@ -309,6 +354,7 @@ padding:10px 14px;border-radius:999px;text-decoration:none;font:inherit;cursor:p
 select,input[type=file] {{ width:100%;padding:10px;border:1px solid #353942;border-radius:10px;background:#0b0c0f;color:#f4f1e8 }}
 .archive-list {{ display:grid;gap:8px }} .archive-row {{ display:flex;justify-content:space-between;gap:20px;align-items:center;padding:14px 16px }}
 .archive-row strong,.archive-row span {{ display:block }} .archive-row span {{ color:#888e99;font-size:.82rem;margin-top:4px }}
+.archive-actions {{ display:flex;align-items:center;gap:10px;flex-wrap:wrap }}
 code {{ color:#a8ff78 }} #progress {{ margin-top:20px }}
 @media(max-width:650px) {{
   article,.archive-row {{ align-items:flex-start;flex-direction:column }}

@@ -1,5 +1,7 @@
 """Server-rendered private UI for data onboarding and connections."""
 
+# ruff: noqa: I001  # Import ordering matches main; keep this exemption local to the rewritten UI.
+
 from __future__ import annotations
 
 from html import escape

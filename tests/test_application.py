@@ -56,11 +56,10 @@ def _client(tmp_path: Path) -> TestClient:
     )
 
 
-def test_health_is_public_but_private_app_requires_owner(tmp_path):
+def test_health_is_public_but_private_api_requires_owner(tmp_path):
     client = _client(tmp_path)
     assert client.get("/health").status_code == 200
     assert client.get("/connections").status_code == 401
-    assert client.get("/app/connections").status_code == 401
 
 
 def test_owner_sees_shared_provider_registry_in_api_and_ui(tmp_path):
@@ -110,6 +109,19 @@ def test_public_landing_describes_project_without_auth(tmp_path):
     assert 'href="/app/"' in response.text
 
 
-def test_private_app_still_requires_identity(tmp_path):
+def test_private_app_redirects_unauthenticated_browser_to_entra(tmp_path):
     client = _client(tmp_path)
-    assert client.get("/app/").status_code == 401
+    response = client.get("/app/", follow_redirects=False)
+    assert response.status_code == 307
+    assert response.headers["location"] == (
+        "/.auth/login/aad?post_login_redirect_uri=%2Fapp%2F"
+    )
+
+
+def test_private_ui_redirect_preserves_requested_path(tmp_path):
+    client = _client(tmp_path)
+    response = client.get("/app/connections?from=home", follow_redirects=False)
+    assert response.status_code == 307
+    assert response.headers["location"] == (
+        "/.auth/login/aad?post_login_redirect_uri=%2Fapp%2Fconnections%3Ffrom%3Dhome"
+    )

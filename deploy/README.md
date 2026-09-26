@@ -18,7 +18,7 @@ A production host must provide:
 
 - HTTPS ingress;
 - a trusted identity-aware authentication layer;
-- an unspoofable verified owner-subject header;
+- an unspoofable verified Entra principal object-ID header;
 - durable single-instance storage for `/data`;
 - a CredentialStore implementation (Azure Key Vault is the reference backend);
 - provider client credentials through a secret mechanism;

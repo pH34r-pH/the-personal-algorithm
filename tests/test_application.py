@@ -54,7 +54,8 @@ def _client(tmp_path: Path) -> TestClient:
                 transport=httpx.MockTransport(_github),
             ),
             oauth_http=httpx.Client(transport=httpx.MockTransport(_oauth)),
-        )
+        ),
+        base_url="https://testserver",
     )
 
 
@@ -142,7 +143,7 @@ def test_github_connect_builds_callback_and_returns_to_onboarding(tmp_path):
     assert started.status_code == 307
     params = parse_qs(urlparse(started.headers["location"]).query)
     assert params["redirect_uri"] == [
-        "http://testserver/connections/github/callback"
+        "https://testserver/connections/github/callback"
     ]
     state = params["state"][0]
 

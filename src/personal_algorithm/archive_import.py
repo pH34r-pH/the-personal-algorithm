@@ -91,7 +91,7 @@ class ArchiveImportService:
             )
             self._save(result)
             self.inbox.set_status(record.sha256, "import_failed")
-            raise
+            return result
 
     def get_for_archive(self, sha256: str) -> tuple[ArchiveImportResult, ...]:
         rows = self.store.connection.execute(

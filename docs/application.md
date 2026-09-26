@@ -21,7 +21,7 @@ The health endpoint remains public for infrastructure probes. Connections and UI
 
 ```text
 TPA_DATABASE
-TPA_OWNER_SUBJECT
+TPA_OWNER_OBJECT_ID
 TPA_KEY_VAULT_URL
 TPA_GITHUB_CLIENT_ID
 TPA_GITHUB_CLIENT_SECRET

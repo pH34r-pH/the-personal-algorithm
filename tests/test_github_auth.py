@@ -60,6 +60,7 @@ def test_authorization_state_is_one_time_and_callback_stores_token():
     params = parse_qs(urlparse(url).query)
     state = params["state"][0]
     assert params["client_id"] == ["client-id"]
+    assert params["scope"] == ["read:user"]
 
     connection = auth.complete(code="code", state=state)
     assert connection.account_label == "fixture"

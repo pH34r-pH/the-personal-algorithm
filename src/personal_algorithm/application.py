@@ -90,6 +90,7 @@ def create_private_app(
     private_ui = protect(
         create_ui_router(registry=registry, connections=connection_store),
         auth,
+        redirect_unauthenticated=True,
     )
 
     app.include_router(private_connections)

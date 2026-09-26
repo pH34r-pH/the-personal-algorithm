@@ -26,7 +26,7 @@ from .ui import create_ui_router
 @dataclass(frozen=True, slots=True)
 class ApplicationSettings:
     database: str
-    owner_subject: str
+    owner_object_id: str
     key_vault_url: str
     github_client_id: str
     github_client_secret: str
@@ -36,7 +36,7 @@ class ApplicationSettings:
     def from_env(cls) -> ApplicationSettings:
         required = {
             "database": os.getenv("TPA_DATABASE", "data/personal-algorithm.sqlite3"),
-            "owner_subject": os.getenv("TPA_OWNER_SUBJECT", ""),
+            "owner_object_id": os.getenv("TPA_OWNER_OBJECT_ID", ""),
             "key_vault_url": os.getenv("TPA_KEY_VAULT_URL", ""),
             "github_client_id": os.getenv("TPA_GITHUB_CLIENT_ID", ""),
             "github_client_secret": os.getenv("TPA_GITHUB_CLIENT_SECRET", ""),
@@ -74,7 +74,7 @@ def create_private_app(
         provider=github,
     )
 
-    auth = InstanceAuth(owner_subject=settings.owner_subject)
+    auth = InstanceAuth(owner_object_id=settings.owner_object_id)
     app = FastAPI(title="The Personal Algorithm", version="0.1.0")
 
     private_connections = protect(

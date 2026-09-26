@@ -9,10 +9,12 @@ import re
 import tarfile
 import tempfile
 import zipfile
+from collections.abc import AsyncIterable
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path, PurePosixPath
-from typing import AsyncIterable
+
+import anyio
 
 from .store import Store
 
@@ -71,7 +73,7 @@ class ArchiveInbox:
         digest = hashlib.sha256()
         size = 0
         try:
-            with tmp.open("wb") as handle:
+            async with await anyio.open_file(tmp, "wb") as handle:
                 async for chunk in chunks:
                     if not chunk:
                         continue
@@ -79,7 +81,7 @@ class ArchiveInbox:
                     if size > self.max_bytes:
                         raise ValueError("archive exceeds configured upload limit")
                     digest.update(chunk)
-                    handle.write(chunk)
+                    await handle.write(chunk)
 
             sha = digest.hexdigest()
             existing = self.get(sha)

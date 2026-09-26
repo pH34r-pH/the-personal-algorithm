@@ -144,7 +144,8 @@ def _event_from_row(
     event_type, subject, uri = _identity(row)
     canonical = _spotify_url(uri)
     stable_payload = json.dumps(row, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
-    event_digest = hashlib.sha256(stable_payload.encode("utf-8")).hexdigest()
+    identity = "\0".join((archive_sha256, member_name, str(index), stable_payload))
+    event_digest = hashlib.sha256(identity.encode("utf-8")).hexdigest()
 
     return PersonalEvent(
         id=f"spotify:stream:{event_digest}",

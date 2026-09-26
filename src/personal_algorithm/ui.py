@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from html import escape
-from typing import Callable
 
 from fastapi import APIRouter
 from fastapi.responses import HTMLResponse
@@ -18,8 +18,10 @@ EXPORT_SOURCES = (
     (
         "google",
         "Google + YouTube",
-        "Largest single export. Keep all products selected if maximum coverage matters; "
-        "multi-part Takeout archives are fine.",
+        (
+            "Largest single export. Keep all products selected if maximum coverage matters; "
+            "multi-part Takeout archives are fine."
+        ),
         "https://takeout.google.com/",
     ),
     (

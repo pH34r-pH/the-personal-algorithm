@@ -154,6 +154,22 @@ class ArchiveInbox:
             for row in rows
         )
 
+    def path_for(self, record: ArchiveRecord) -> Path:
+        path = (self.root / record.relative_path).resolve()
+        root = self.root.resolve()
+        if root not in path.parents:
+            raise ValueError("archive path escapes configured inbox")
+        if not path.is_file():
+            raise FileNotFoundError(path)
+        return path
+
+    def set_status(self, sha256: str, status: str) -> None:
+        self.store.connection.execute(
+            "UPDATE archive_uploads SET status = ? WHERE sha256 = ?",
+            (status, sha256),
+        )
+        self.store.connection.commit()
+
     def _save(self, record: ArchiveRecord) -> None:
         self.store.connection.execute(
             """INSERT INTO archive_uploads

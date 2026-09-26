@@ -27,7 +27,7 @@ TPA_GITHUB_CLIENT_ID
 TPA_GITHUB_CLIENT_SECRET
 ```
 
-`TPA_DATABASE` defaults to `data/personal-algorithm.sqlite3`; the remaining settings fail closed if absent.
+`TPA_DATABASE` defaults to `data/personal-algorithm.sqlite3`. `TPA_ARCHIVE_DIR` defaults to `data/archives`, and `TPA_ARCHIVE_MAX_BYTES` defaults to 50 GiB per upload. The remaining identity/provider settings fail closed if absent. Production should mount `TPA_ARCHIVE_DIR` on storage separate from the live SQLite snapshot.
 
 The GitHub client secret is itself deployment secret material. For the reference Azure deployment it should be injected from Key Vault/platform secret references rather than committed or placed in a checked-in environment file.
 

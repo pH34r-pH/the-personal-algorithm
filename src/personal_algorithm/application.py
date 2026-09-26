@@ -9,6 +9,8 @@ from pathlib import Path
 from fastapi import FastAPI
 from fastapi.responses import HTMLResponse
 
+from .archive_api import create_archive_router
+from .archives import ArchiveInbox
 from .azure_credentials import AzureKeyVaultCredentialStore
 from .bootstrap import BootstrapCoordinator
 from .connections import ConnectionStore
@@ -31,6 +33,8 @@ class ApplicationSettings:
     github_client_id: str
     github_client_secret: str
     database_snapshot: str | None = None
+    archive_dir: str = "data/archives"
+    archive_max_bytes: int = 50 * 1024 * 1024 * 1024
 
     @classmethod
     def from_env(cls) -> ApplicationSettings:
@@ -44,7 +48,14 @@ class ApplicationSettings:
         missing = [name for name, value in required.items() if not value]
         if missing:
             raise RuntimeError(f"missing application settings: {', '.join(missing)}")
-        return cls(**required, database_snapshot=os.getenv("TPA_DATABASE_SNAPSHOT"))
+        return cls(
+            **required,
+            database_snapshot=os.getenv("TPA_DATABASE_SNAPSHOT"),
+            archive_dir=os.getenv("TPA_ARCHIVE_DIR", "data/archives"),
+            archive_max_bytes=int(
+                os.getenv("TPA_ARCHIVE_MAX_BYTES", str(50 * 1024 * 1024 * 1024))
+            ),
+        )
 
 
 def create_private_app(
@@ -59,6 +70,11 @@ def create_private_app(
     store = Store(database_path, snapshot_path=settings.database_snapshot)
     connection_store = ConnectionStore(store)
     bootstrap = BootstrapCoordinator(store)
+    archive_inbox = ArchiveInbox(
+        store,
+        settings.archive_dir,
+        max_bytes=settings.archive_max_bytes,
+    )
 
     credential_store = credentials or AzureKeyVaultCredentialStore(settings.key_vault_url)
     github = GitHubProvider(credential_store, client=github_http)
@@ -87,13 +103,20 @@ def create_private_app(
         ),
         auth,
     )
+    private_archives = protect(create_archive_router(archive_inbox), auth)
     private_ui = protect(
-        create_ui_router(registry=registry, connections=connection_store),
+        create_ui_router(
+            registry=registry,
+            connections=connection_store,
+            archives=archive_inbox,
+            personal_event_count=store.count_personal_events,
+        ),
         auth,
         redirect_unauthenticated=True,
     )
 
     app.include_router(private_connections)
+    app.include_router(private_archives)
     app.include_router(private_ui, prefix="/app")
 
     @app.get("/", response_class=HTMLResponse)

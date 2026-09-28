@@ -15,41 +15,36 @@ from .provider_registry import ProviderRegistry
 from .providers import ProviderCapability
 
 
-def create_connections_router(
-    *,
-    registry: ProviderRegistry,
-    connections: ConnectionStore,
-    bootstrap: BootstrapCoordinator,
-    github_auth: GitHubAuthorization | None = None,
-    github_provider: GitHubProvider | None = None,
-) -> APIRouter:
-    router = APIRouter(prefix="/connections", tags=["connections"])
+def _provider_listing(registry: ProviderRegistry, connections: ConnectionStore) -> dict:
+    connected = {item.provider_id: item for item in connections.list()}
+    providers = []
+    for descriptor in registry.descriptors():
+        connection = connected.get(descriptor.id)
+        providers.append(
+            {
+                "id": descriptor.id,
+                "display_name": descriptor.display_name,
+                "capabilities": sorted(cap.value for cap in descriptor.capabilities),
+                "requested_scopes": list(descriptor.requested_scopes),
+                "connected": connection is not None,
+                "account_label": connection.account_label if connection else None,
+                "status": connection.status.value if connection else "disconnected",
+            }
+        )
+    return {"providers": providers}
 
-    @router.get("")
-    def list_connections() -> dict:
-        connected = {item.provider_id: item for item in connections.list()}
-        providers = []
-        for descriptor in registry.descriptors():
-            connection = connected.get(descriptor.id)
-            providers.append(
-                {
-                    "id": descriptor.id,
-                    "display_name": descriptor.display_name,
-                    "capabilities": sorted(cap.value for cap in descriptor.capabilities),
-                    "requested_scopes": list(descriptor.requested_scopes),
-                    "connected": connection is not None,
-                    "account_label": connection.account_label if connection else None,
-                    "status": connection.status.value if connection else "disconnected",
-                }
-            )
-        return {"providers": providers}
+
+def _github_router(
+    github_auth: GitHubAuthorization | None,
+    connections: ConnectionStore,
+) -> APIRouter:
+    router = APIRouter()
 
     @router.get("/github/connect")
     def github_connect(request: Request):
         if github_auth is None:
             raise HTTPException(status_code=503, detail="GitHub authorization is not configured")
-        redirect_uri = str(request.url_for("github_callback"))
-        return RedirectResponse(github_auth.begin(redirect_uri))
+        return RedirectResponse(github_auth.begin(str(request.url_for("github_callback"))))
 
     @router.get("/github/callback", name="github_callback")
     def github_callback(code: str, state: str):
@@ -62,6 +57,16 @@ def create_connections_router(
         connections.put(connection)
         return RedirectResponse("/app/onboarding?bootstrap=github", status_code=303)
 
+    return router
+
+
+def _bootstrap_router(
+    registry: ProviderRegistry,
+    connections: ConnectionStore,
+    bootstrap: BootstrapCoordinator,
+) -> APIRouter:
+    router = APIRouter()
+
     @router.post("/{provider_id}/bootstrap", status_code=201)
     def start_bootstrap(provider_id: str):
         try:
@@ -71,19 +76,14 @@ def create_connections_router(
             raise HTTPException(status_code=404, detail=str(exc)) from exc
         if ProviderCapability.HISTORY_IMPORT not in provider.descriptor.capabilities:
             raise HTTPException(status_code=409, detail="provider does not support history import")
-        job = bootstrap.create(connection)
-        return _job(job)
+        return _job(bootstrap.create(connection))
 
     @router.post("/{provider_id}/bootstrap/{job_id}/step")
     def step_bootstrap(provider_id: str, job_id: str):
         try:
             connection = connections.get(provider_id)
             provider = registry.get(provider_id)
-            job, candidates = bootstrap.step(
-                job_id,
-                connection=connection,
-                provider=provider,
-            )
+            job, candidates = bootstrap.step(job_id, connection=connection, provider=provider)
         except KeyError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
         return {**_job(job), "candidates_imported_this_step": len(candidates)}
@@ -98,6 +98,25 @@ def create_connections_router(
             raise HTTPException(status_code=404, detail="bootstrap job not found for provider")
         return _job(job)
 
+    return router
+
+
+def create_connections_router(
+    *,
+    registry: ProviderRegistry,
+    connections: ConnectionStore,
+    bootstrap: BootstrapCoordinator,
+    github_auth: GitHubAuthorization | None = None,
+    github_provider: GitHubProvider | None = None,
+) -> APIRouter:
+    router = APIRouter(prefix="/connections", tags=["connections"])
+
+    @router.get("")
+    def list_connections() -> dict:
+        return _provider_listing(registry, connections)
+
+    router.include_router(_github_router(github_auth, connections))
+    router.include_router(_bootstrap_router(registry, connections, bootstrap))
     return router
 
 

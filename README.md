@@ -1,88 +1,79 @@
 # The Personal Algorithm
 
+[![CI](https://github.com/pH34r-pH/the-personal-algorithm/actions/workflows/ci.yml/badge.svg)](https://github.com/pH34r-pH/the-personal-algorithm/actions/workflows/ci.yml)
+[![License](https://img.shields.io/github/license/pH34r-pH/the-personal-algorithm)](LICENSE)
+
 **Your feeds. Your history. Your objectives. Your algorithm.**
 
-The Personal Algorithm is an open, self-hosted framework for taking ownership of recommendation and discovery. Sources provide candidates; your instance decides what deserves your attention.
+The Personal Algorithm is an open, self-hosted recommendation and discovery system that makes ranking policy an explicit part of the product. Sources provide candidates; your instance decides what deserves attention, preserves provenance, and explains the reference score.
 
 > Platforms may supply content. They do not have to own the final ranking policy.
 
-## Status
+## Why this exists
 
-Early design scaffold. The first milestone is deliberately small: open feeds and public sources -> a universal Candidate contract -> an inspectable deterministic ranker -> explanations -> a private web feed -> explicit feedback.
+Most recommendation systems combine acquisition, ranking, feedback, and business objectives behind one opaque interface. This project separates them. A useful instance should be able to ingest permitted sources, rank candidates deterministically under a versioned policy, show why each item received its score, record semantic feedback, and keep personal state inside the deployment boundary.
 
-## Principles
+The core remains useful without a model API or GPU.
 
-1. **User-owned ranking.** The objective function belongs to the person running the instance.
-2. **Explain every recommendation.** Scores should carry an inspectable contribution trace.
-3. **Local-first personal state.** History, feedback, embeddings, credentials, and private profiles are deployment data, not repository data.
-4. **Sources are adapters.** Prefer official APIs, feeds, exports, and permitted access. Never make bypassing access controls a product requirement.
-5. **Discovery before consumption.** Linking back to the source is the default; copying or re-hosting third-party content is not required.
-6. **Exploration is intentional.** Familiarity, adjacency, counterpoint, serendipity, and chaos are explicit policy choices.
-7. **Models advise; people govern.** A model may propose policy changes, but policy changes remain visible and user-controlled.
-8. **Portable core.** Source, ranker, presentation, and learner interfaces should be independently replaceable.
+## What is implemented
+
+The repository contains portable Candidate / RankedCandidate / Explanation / Interaction / Policy contracts, SQLite-backed state, deterministic ranking, source and provider abstractions, open-feed ingestion, private application/API surfaces, historical-import plumbing, deployment documentation, and CI/structural quality gates.
+
+Implementation changes quickly. The default branch and tests are authoritative; [the roadmap](docs/roadmap.md) describes intended milestones rather than promises.
+
+## Quick start
+
+```sh
+python -m venv .venv
+. .venv/bin/activate
+pip install -e ".[dev]"
+cp config.example.json config.json
+personal-algorithm-ingest --config config.json
+```
+
+Run the development application with:
+
+```sh
+uvicorn personal_algorithm.api:app --reload
+```
+
+Do not expose the unauthenticated development server directly to the public Internet.
 
 ## Architecture
 
 ```text
-Source adapters
-      |
-      v
-   Candidate
-      |
-      v
-    Ranker <-------------------+
-      |                        |
-      v                        |
-RankedCandidate                |
- + Explanation                 |
-      |                        |
-      v                        |
- Presentation                  |
-      |                        |
-      v                        |
- Interaction ----------------> Learner
+sources / imports -> Candidate -> Ranker + Policy -> RankedCandidate + Explanation
+                                                           |
+                                                           v
+                                                     Presentation
+                                                           |
+                                                           v
+                                                     Interaction -> Learner
 ```
 
-See [docs/architecture.md](docs/architecture.md) and [docs/prior-art.md](docs/prior-art.md).
+The important boundary is ownership: source adapters acquire, policy decides, explanation makes the reference decision inspectable, and immutable interaction events provide evidence for future preference state.
 
-## First vertical slice
+Read [Architecture](docs/architecture.md), [Public contracts](docs/contracts.md), and the [project Wiki](https://github.com/pH34r-pH/the-personal-algorithm/wiki) for the complete map.
 
-The initial implementation should prove the contract rather than maximize source coverage:
+## Privacy model
 
-- RSS/Atom
-- arXiv
-- GitHub
-- universal Candidate schema
-- deterministic transparent ranking
-- explanation trace
-- explicit feedback events
-- private web UI
-- Docker Compose deployment
+The public repository contains code, tests, fixtures, and safe example configuration. Real credentials, provider tokens, archives, interaction history, embeddings, profiles, and personal policy state are deployment data. They do not belong in Git.
 
-YouTube, Reddit, social networks, historical-data import, learned rankers, natural-language policy editing, and federation are intentionally later.
+Provider passwords are not an integration mechanism. Authenticated providers use revocable authorization and opaque credential references; historical bootstrap and continuous sync remain separate capabilities.
 
-## Personal deployments
+## Repository map
 
-The public repository contains code and example configuration only. A deployment owns its profile, source credentials, history, interaction logs, embeddings, and policy configuration.
+- `src/personal_algorithm/` — application and domain implementation.
+- `tests/` — executable contracts and regression coverage.
+- `docs/` — authoritative design and deployment documentation.
+- `docs/wiki/` — canonical source for the public GitHub Wiki.
+- `deploy/` — deployment-specific material.
+- `.github/workflows/` — CI, publication, and quality automation.
 
-A future goal is a reproducible path approximately as simple as:
+## Contributing and security
 
-```sh
-cp .env.example .env
-docker compose up
-```
+Contributions are welcome; read [CONTRIBUTING.md](CONTRIBUTING.md) and use the pull-request template. Security problems or accidental personal-data exposure should follow [SECURITY.md](SECURITY.md), not a public issue containing sensitive material.
 
-followed by browser-based onboarding.
+## Citation and license
 
-## Non-goals (for now)
-
-- becoming another social network
-- mirroring the entire web
-- maximizing engagement or time-on-site
-- training a foundation model on third-party content
-- bypassing authentication, rate limits, DRM, or anti-bot controls
-- federation between Personal Algorithm instances
-
-## License
-
-Licensed under the Apache License, Version 2.0. See [LICENSE](LICENSE).
+Research use can cite [CITATION.cff](CITATION.cff). The project is licensed under the Apache License 2.0; see [LICENSE](LICENSE) and [NOTICE](NOTICE).

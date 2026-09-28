@@ -1,0 +1,11 @@
+cff-version: 1.2.0
+message: "If you use The Personal Algorithm in research, please cite the software repository."
+title: "The Personal Algorithm"
+type: software
+authors:
+  - family-names: "Harbin-Giuntoli"
+    given-names: "Tyler James"
+    alias: "Tyler J.H.G."
+repository-code: "https://github.com/pH34r-pH/the-personal-algorithm"
+license: "Apache-2.0"
+date-released: 2026-09-27

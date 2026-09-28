@@ -57,13 +57,7 @@ EXPORT_SOURCES = (
 )
 
 
-def create_ui_router(
-    *,
-    registry: ProviderRegistry,
-    connections: ConnectionStore,
-    archives=None,
-    personal_event_count=None,
-) -> APIRouter:
+def _home_router(archives, personal_event_count) -> APIRouter:
     router = APIRouter()
 
     @router.get("/", response_class=HTMLResponse)
@@ -81,110 +75,129 @@ def create_ui_router(
         <a class="button" href="/app/connections">Connections</a></div></main>"""
         return _page("The Personal Algorithm", body)
 
+    return router
+
+
+def _export_cards() -> str:
+    return "".join(
+        f"""<article class="source-card"><div><p class="eyebrow">{escape(provider.upper())}</p>
+        <h2>{escape(name)}</h2><p>{escape(note)}</p></div>
+        <a class="button" target="_blank" rel="noopener" href="{escape(url)}">Request / open export ↗</a></article>"""
+        for provider, name, note, url in EXPORT_SOURCES
+    )
+
+
+def _onboarding_body(connections: ConnectionStore, archives) -> str:
+    connected = {item.provider_id: item for item in connections.list()}
+    github = connected.get("github")
+    github_action = (
+        f'<span class="status">Connected as {escape(github.account_label)}</span>'
+        if github
+        else '<a class="button" href="/connections/github/connect">Connect GitHub</a>'
+    )
+    return f"""<main><a class="back" href="/app/">← Private home</a>
+    <p class="eyebrow">DATA ONBOARDING</p><h1>One login.<br>One export.<br>Keep the data.</h1>
+    <p class="lede">Start with the actions that return the most history per step.
+    Raw archives are retained outside the live SQLite database so we can improve parsers
+    later without asking you to download the same history again.</p>
+    <h2 class="section-title">Best first moves</h2>
+    <section>
+      <article class="source-card featured"><div><p class="eyebrow">GOOGLE</p>
+      <h2>Google Takeout</h2><p>Highest-yield first export: YouTube, My Activity,
+      Search, Chrome and any other Google products you want to preserve in one request.</p></div>
+      <a class="button primary" target="_blank" rel="noopener" href="https://takeout.google.com/">Open Takeout ↗</a></article>
+      <article class="source-card featured"><div><p class="eyebrow">SPOTIFY</p>
+      <h2>Lifetime listening</h2><p>Request Extended Streaming History once. It gives
+      us the historical event stream rather than only a current taste profile.</p></div>
+      <a class="button primary" target="_blank" rel="noopener" href="https://www.spotify.com/account/privacy/">Open Spotify privacy ↗</a></article>
+      <article class="source-card featured"><div><p class="eyebrow">GITHUB</p>
+      <h2>Connect once</h2><p>The existing provider connection can import accessible
+      repository history and later support ongoing discovery.</p></div>{github_action}</article>
+    </section>
+    <h2 class="section-title">Upload anything that is ready</h2>
+    <div class="upload-card">
+      <label>Provider hint<select id="provider">
+        <option value="">Auto-detect</option><option value="google">Google / YouTube</option>
+        <option value="spotify">Spotify</option><option value="x">X</option>
+        <option value="linkedin">LinkedIn</option><option value="meta">Meta</option>
+        <option value="reddit">Reddit</option><option value="browser">Browser / local</option>
+      </select></label>
+      <label>Archive or export file<input id="archives" type="file" multiple></label>
+      <button id="upload" class="button primary">Store selected files</button>
+      <p id="upload-status" class="status" aria-live="polite"></p>
+    </div>
+    <h2 class="section-title">More high-yield exports</h2><section>{_export_cards()}</section>
+    <h2 class="section-title">Already retained</h2>
+    <div class="archive-list">{_archive_rows(archives)}</div>
+    <p id="progress" class="status" aria-live="polite"></p></main>{_onboarding_script()}"""
+
+
+def _onboarding_router(connections: ConnectionStore, archives) -> APIRouter:
+    router = APIRouter()
+
     @router.get("/onboarding", response_class=HTMLResponse)
     def onboarding() -> str:
-        connected = {item.provider_id: item for item in connections.list()}
-        github = connected.get("github")
-        github_action = (
-            f'<span class="status">Connected as {escape(github.account_label)}</span>'
-            if github
-            else '<a class="button" href="/connections/github/connect">Connect GitHub</a>'
+        return _page("Onboarding · The Personal Algorithm", _onboarding_body(connections, archives))
+
+    return router
+
+
+def _connection_cards(registry: ProviderRegistry, connections: ConnectionStore) -> str:
+    connected = {item.provider_id: item for item in connections.list()}
+    cards = []
+    for descriptor in registry.descriptors():
+        connection = connected.get(descriptor.id)
+        capabilities = " · ".join(
+            cap.value.replace("_", " ")
+            for cap in sorted(descriptor.capabilities, key=lambda cap: cap.value)
         )
-
-        export_cards = "".join(
-            f"""<article class="source-card"><div><p class="eyebrow">{escape(provider.upper())}</p>
-            <h2>{escape(name)}</h2><p>{escape(note)}</p></div>
-            <a class="button" target="_blank" rel="noopener" href="{escape(url)}">Request / open export ↗</a></article>"""
-            for provider, name, note, url in EXPORT_SOURCES
+        if connection:
+            action = f'<span class="status">Connected as {escape(connection.account_label)}</span>'
+            if ProviderCapability.HISTORY_IMPORT in descriptor.capabilities:
+                action += (
+                    f'<button class="button" data-bootstrap="{escape(descriptor.id)}">'
+                    "Import history</button>"
+                )
+        elif descriptor.id == "github":
+            action = '<a class="button" href="/connections/github/connect">Connect GitHub</a>'
+        else:
+            action = '<span class="muted">Not configured yet</span>'
+        cards.append(
+            f'<article><div><p class="eyebrow">{escape(descriptor.id.upper())}</p>'
+            f'<h2>{escape(descriptor.display_name)}</h2><p>{escape(capabilities)}</p></div>'
+            f'<div class="actions">{action}</div></article>'
         )
-        archive_rows = _archive_rows(archives)
-        body = f"""<main><a class="back" href="/app/">← Private home</a>
-        <p class="eyebrow">DATA ONBOARDING</p><h1>One login.<br>One export.<br>Keep the data.</h1>
-        <p class="lede">Start with the actions that return the most history per step.
-        Raw archives are retained outside the live SQLite database so we can improve parsers
-        later without asking you to download the same history again.</p>
+    return "".join(cards)
 
-        <h2 class="section-title">Best first moves</h2>
-        <section>
-          <article class="source-card featured"><div><p class="eyebrow">GOOGLE</p>
-          <h2>Google Takeout</h2><p>Highest-yield first export: YouTube, My Activity,
-          Search, Chrome and any other Google products you want to preserve in one request.</p></div>
-          <a class="button primary" target="_blank" rel="noopener" href="https://takeout.google.com/">Open Takeout ↗</a></article>
-          <article class="source-card featured"><div><p class="eyebrow">SPOTIFY</p>
-          <h2>Lifetime listening</h2><p>Request Extended Streaming History once. It gives
-          us the historical event stream rather than only a current taste profile.</p></div>
-          <a class="button primary" target="_blank" rel="noopener" href="https://www.spotify.com/account/privacy/">Open Spotify privacy ↗</a></article>
-          <article class="source-card featured"><div><p class="eyebrow">GITHUB</p>
-          <h2>Connect once</h2><p>The existing provider connection can import accessible
-          repository history and later support ongoing discovery.</p></div>{github_action}</article>
-        </section>
 
-        <h2 class="section-title">Upload anything that is ready</h2>
-        <div class="upload-card">
-          <label>Provider hint
-            <select id="provider">
-              <option value="">Auto-detect</option>
-              <option value="google">Google / YouTube</option>
-              <option value="spotify">Spotify</option>
-              <option value="x">X</option>
-              <option value="linkedin">LinkedIn</option>
-              <option value="meta">Meta</option>
-              <option value="reddit">Reddit</option>
-              <option value="browser">Browser / local</option>
-            </select>
-          </label>
-          <label>Archive or export file
-            <input id="archives" type="file" multiple>
-          </label>
-          <button id="upload" class="button primary">Store selected files</button>
-          <p id="upload-status" class="status" aria-live="polite"></p>
-        </div>
-
-        <h2 class="section-title">More high-yield exports</h2>
-        <section>{export_cards}</section>
-
-        <h2 class="section-title">Already retained</h2>
-        <div class="archive-list">{archive_rows}</div>
-        <p id="progress" class="status" aria-live="polite"></p>
-        </main>
-        {_onboarding_script()}"""
-        return _page("Onboarding · The Personal Algorithm", body)
+def _connections_page_router(registry: ProviderRegistry, connections: ConnectionStore) -> APIRouter:
+    router = APIRouter()
 
     @router.get("/connections", response_class=HTMLResponse)
     def connection_page() -> str:
-        connected = {item.provider_id: item for item in connections.list()}
-        cards = []
-        for descriptor in registry.descriptors():
-            connection = connected.get(descriptor.id)
-            capabilities = " · ".join(
-                cap.value.replace("_", " ")
-                for cap in sorted(descriptor.capabilities, key=lambda cap: cap.value)
-            )
-            if connection:
-                action = f'<span class="status">Connected as {escape(connection.account_label)}</span>'
-                if ProviderCapability.HISTORY_IMPORT in descriptor.capabilities:
-                    action += (
-                        f'<button class="button" data-bootstrap="{escape(descriptor.id)}">'
-                        "Import history</button>"
-                    )
-            elif descriptor.id == "github":
-                action = '<a class="button" href="/connections/github/connect">Connect GitHub</a>'
-            else:
-                action = '<span class="muted">Not configured yet</span>'
-            cards.append(
-                f'<article><div><p class="eyebrow">{escape(descriptor.id.upper())}</p>'
-                f'<h2>{escape(descriptor.display_name)}</h2><p>{escape(capabilities)}</p></div>'
-                f'<div class="actions">{action}</div></article>'
-            )
-
         body = """<main><a class="back" href="/app/onboarding">← Onboarding</a>
         <p class="eyebrow">CONNECTED ACCOUNTS</p><h1>Connections</h1>
         <p class="lede">Connections are for current account access and future sync.
         Historical archives stay separate so one OAuth grant does not pretend to expose data
-        that a provider only includes in its export.</p><section>""" + "".join(cards) + """</section>
-        <div id="progress" aria-live="polite"></div></main>""" + _bootstrap_script()
+        that a provider only includes in its export.</p><section>""" + _connection_cards(
+            registry, connections
+        ) + """</section><div id="progress" aria-live="polite"></div></main>""" + _bootstrap_script()
         return _page("Connections · The Personal Algorithm", body)
 
+    return router
+
+
+def create_ui_router(
+    *,
+    registry: ProviderRegistry,
+    connections: ConnectionStore,
+    archives=None,
+    personal_event_count=None,
+) -> APIRouter:
+    router = APIRouter()
+    router.include_router(_home_router(archives, personal_event_count))
+    router.include_router(_onboarding_router(connections, archives))
+    router.include_router(_connections_page_router(registry, connections))
     return router
 
 

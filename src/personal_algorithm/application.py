@@ -58,29 +58,19 @@ class ApplicationSettings:
         )
 
 
-def create_private_app(
-    settings: ApplicationSettings,
-    *,
-    credentials=None,
-    github_http=None,
-    oauth_http=None,
-) -> FastAPI:
+def _build_services(settings: ApplicationSettings, credentials, github_http, oauth_http):
     database_path = Path(settings.database)
     database_path.parent.mkdir(parents=True, exist_ok=True)
     store = Store(database_path, snapshot_path=settings.database_snapshot)
     connection_store = ConnectionStore(store)
     bootstrap = BootstrapCoordinator(store)
     archive_inbox = ArchiveInbox(
-        store,
-        settings.archive_dir,
-        max_bytes=settings.archive_max_bytes,
+        store, settings.archive_dir, max_bytes=settings.archive_max_bytes
     )
-
     credential_store = credentials or AzureKeyVaultCredentialStore(settings.key_vault_url)
     github = GitHubProvider(credential_store, client=github_http)
     registry = ProviderRegistry()
     registry.register(github)
-
     github_auth = GitHubAuthorization(
         client_id=settings.github_client_id,
         client_secret=settings.github_client_secret,
@@ -89,39 +79,42 @@ def create_private_app(
         http=oauth_http,
         provider=github,
     )
+    return store, connection_store, bootstrap, archive_inbox, github, registry, github_auth
 
+
+def _include_private_routers(app: FastAPI, settings: ApplicationSettings, services) -> None:
+    store, connection_store, bootstrap, archive_inbox, github, registry, github_auth = services
     auth = InstanceAuth(owner_object_id=settings.owner_object_id)
-    app = FastAPI(title="The Personal Algorithm", version="0.1.0")
-
-    private_connections = protect(
-        create_connections_router(
-            registry=registry,
-            connections=connection_store,
-            bootstrap=bootstrap,
-            github_auth=github_auth,
-            github_provider=github,
-        ),
-        auth,
+    app.include_router(
+        protect(
+            create_connections_router(
+                registry=registry,
+                connections=connection_store,
+                bootstrap=bootstrap,
+                github_auth=github_auth,
+                github_provider=github,
+            ),
+            auth,
+        )
     )
-    private_archives = protect(create_archive_router(archive_inbox), auth)
-    private_ui = protect(
-        create_ui_router(
-            registry=registry,
-            connections=connection_store,
-            archives=archive_inbox,
-            personal_event_count=store.count_personal_events,
+    app.include_router(protect(create_archive_router(archive_inbox), auth))
+    app.include_router(
+        protect(
+            create_ui_router(
+                registry=registry,
+                connections=connection_store,
+                archives=archive_inbox,
+                personal_event_count=store.count_personal_events,
+            ),
+            auth,
+            redirect_unauthenticated=True,
         ),
-        auth,
-        redirect_unauthenticated=True,
+        prefix="/app",
     )
 
-    app.include_router(private_connections)
-    app.include_router(private_archives)
-    app.include_router(private_ui, prefix="/app")
 
-    @app.get("/", response_class=HTMLResponse)
-    def landing() -> str:
-        return """<!doctype html><html lang="en"><head><meta charset="utf-8">
+def _landing_html() -> str:
+    return """<!doctype html><html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1"><title>The Personal Algorithm</title>
 <style>
 :root{color-scheme:dark;font-family:Georgia,serif}*{box-sizing:border-box}body{margin:0;background:#f0eadc;color:#171717}
@@ -159,12 +152,27 @@ nav{display:flex;gap:18px;flex-wrap:wrap;margin-top:20px;font-family:ui-monospac
 <p class="note"><strong>Public by choice.</strong> React, share, and save are ordinary reader actions. Publish is different: it is an owner action that promotes a selected item from the private Personal Algorithm into this public feed.</p>
 </main></body></html>"""
 
+
+def create_private_app(
+    settings: ApplicationSettings,
+    *,
+    credentials=None,
+    github_http=None,
+    oauth_http=None,
+) -> FastAPI:
+    services = _build_services(settings, credentials, github_http, oauth_http)
+    app = FastAPI(title="The Personal Algorithm", version="0.1.0")
+    _include_private_routers(app, settings, services)
+
+    @app.get("/", response_class=HTMLResponse)
+    def landing() -> str:
+        return _landing_html()
+
     @app.get("/health")
     def health() -> dict[str, str]:
         return {"status": "ok"}
 
     return app
-
 
 def app_from_env() -> FastAPI:
     return create_private_app(ApplicationSettings.from_env())

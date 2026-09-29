@@ -3,6 +3,10 @@
 [![CI](https://github.com/pH34r-pH/the-personal-algorithm/actions/workflows/ci.yml/badge.svg)](https://github.com/pH34r-pH/the-personal-algorithm/actions/workflows/ci.yml)
 [![License](https://img.shields.io/github/license/pH34r-pH/the-personal-algorithm)](LICENSE)
 
+<p align="center">
+  <img src="docs/assets/hero.webp" alt="The Personal Algorithm — private curation and user-owned ranking" width="100%">
+</p>
+
 **Your feeds. Your history. Your objectives. Your algorithm.**
 
 The Personal Algorithm is an open, self-hosted recommendation and discovery system that makes ranking policy an explicit part of the product. Sources provide candidates; your instance decides what deserves attention, preserves provenance, and explains the reference score.

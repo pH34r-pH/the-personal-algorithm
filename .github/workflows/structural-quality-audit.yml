@@ -167,4 +167,4 @@ jobs:
           name: structural-quality-audit-${{ github.sha }}
           path: quality-audit/
           if-no-files-found: warn
-          retention-days: 14
+          retention-days: 7

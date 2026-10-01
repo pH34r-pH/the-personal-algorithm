@@ -1,6 +1,11 @@
+from pathlib import Path
+from runpy import run_path
+
 import pytest
 
-from tools.validate_mutation_report import validate_report
+validate_report = run_path(
+    str(Path(__file__).parents[1] / "tools" / "validate_mutation_report.py")
+)["validate_report"]
 
 
 def _report():

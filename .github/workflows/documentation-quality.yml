@@ -1,0 +1,92 @@
+name: Documentation quality
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  documentation:
+    name: Changed documentation
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+
+      - name: Guard changed paths and select Markdown
+        id: changed-docs
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
+          HEAD_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          base="$BASE_SHA"
+          if [[ "$base" =~ ^0+$ ]]; then
+            base="$(git rev-parse "$HEAD_SHA^")"
+          fi
+          python tools/check_documentation_hygiene.py --base "$base" --head "$HEAD_SHA" --self-test
+          python tools/check_documentation_hygiene.py --base "$base" --head "$HEAD_SHA" --print-docs > "$RUNNER_TEMP/changed-docs.txt"
+          if test -s "$RUNNER_TEMP/changed-docs.txt"; then
+            echo "has_docs=true" >> "$GITHUB_OUTPUT"
+            echo "Changed Markdown:"
+            cat "$RUNNER_TEMP/changed-docs.txt"
+          else
+            echo "has_docs=false" >> "$GITHUB_OUTPUT"
+            echo "No changed Markdown; Markdown and link checks are skipped."
+          fi
+
+      - name: Set up Node
+        if: steps.changed-docs.outputs.has_docs == 'true'
+        uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+
+      - name: Install markdownlint-cli2
+        if: steps.changed-docs.outputs.has_docs == 'true'
+        run: npm install --global --no-audit --no-fund markdownlint-cli2@0.18.1
+
+      - name: Lint changed Markdown
+        if: steps.changed-docs.outputs.has_docs == 'true'
+        run: |
+          mapfile -t docs < "$RUNNER_TEMP/changed-docs.txt"
+          markdownlint-cli2 --config .markdownlint-cli2.mjs "${docs[@]}"
+
+      - name: Install lychee v0.20.1
+        if: steps.changed-docs.outputs.has_docs == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          archive="$RUNNER_TEMP/lychee-v0.20.1.tar.gz"
+          extract="$RUNNER_TEMP/lychee-v0.20.1"
+          mkdir -p "$extract"
+          curl --fail --location --retry 3 \
+            "https://github.com/lycheeverse/lychee/releases/download/lychee-v0.20.1/lychee-x86_64-unknown-linux-gnu.tar.gz" \
+            --output "$archive"
+          tar -xzf "$archive" -C "$extract"
+          binary="$(find "$extract" -type f -name lychee -print -quit)"
+          test -n "$binary"
+          install -D "$binary" "$RUNNER_TEMP/lychee-bin/lychee"
+          echo "$RUNNER_TEMP/lychee-bin" >> "$GITHUB_PATH"
+          "$RUNNER_TEMP/lychee-bin/lychee" --version
+
+      - name: Check links in changed Markdown
+        if: steps.changed-docs.outputs.has_docs == 'true'
+        run: |
+          set -euo pipefail
+          mapfile -t docs < "$RUNNER_TEMP/changed-docs.txt"
+          lychee --verbose --no-progress "${docs[@]}"
+
+      - name: Prove the negative broken-link fixture
+        if: steps.changed-docs.outputs.has_docs == 'true'
+        run: |
+          if lychee --offline --no-progress tests/fixtures/documentation-hygiene/broken-link.md; then
+            echo "::error::the broken-link fixture unexpectedly passed"
+            exit 1
+          fi
+          echo "Broken-link fixture fails as expected."

@@ -24,8 +24,8 @@ def _candidate(candidate_id: str, topic: str) -> Candidate:
 
 def test_configured_feeds_are_deduplicated_ranked_and_persisted():
     feeds = {
-        "feed-a": (_candidate("a", "research"), _candidate("shared", "research")),
-        "feed-b": (_candidate("b", "other"), _candidate("shared", "research")),
+        "feed-a": (_candidate("shared", "research"), _candidate("b", "other")),
+        "feed-b": (_candidate("a", "research"), _candidate("shared", "research")),
     }
 
     def fetcher(url: str) -> tuple[Candidate, ...]:
@@ -46,6 +46,9 @@ def test_configured_feeds_are_deduplicated_ranked_and_persisted():
     )
 
     assert len(ranked) == 3
-    assert [item.candidate.id for item in ranked[:2]] == ["a", "shared"]
+    assert [item.candidate.id for item in ranked] == ["a", "shared", "b"]
+    assert [item.score for item in ranked] == [1.0, 1.0, 0.1]
+    assert all(item.policy_version == "ingest-v1" for item in ranked)
+    assert all(item.ranked_at == NOW for item in ranked)
     assert store.connection.execute("SELECT COUNT(*) FROM candidates").fetchone()[0] == 3
     assert store.connection.execute("SELECT COUNT(*) FROM rankings").fetchone()[0] == 3

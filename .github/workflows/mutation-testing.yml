@@ -1,0 +1,60 @@
+name: Mutation testing
+
+on:
+  pull_request:
+    paths:
+      - "src/personal_algorithm/ranking.py"
+      - "src/personal_algorithm/ingest.py"
+      - "tests/**"
+      - "tools/validate_mutation_report.py"
+      - "tools/mutation-testing-report-schema-v2.json"
+      - "pyproject.toml"
+      - ".github/workflows/mutation-testing.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  mutation:
+    name: Ranking and ingestion mutants
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install development dependencies
+        run: python -m pip install --disable-pip-version-check -e ".[dev]"
+
+      - name: Run bounded mutation baseline
+        run: |
+          irradiate run src/personal_algorithm/ranking.py src/personal_algorithm/ingest.py \
+            --tests-dir tests \
+            --workers 2 \
+            --isolate \
+            --report json \
+            --output mutation-report.raw.json
+
+      - name: Reconcile and validate Stryker report
+        run: |
+          python tools/validate_mutation_report.py mutation-report.raw.json \
+            --normalize-to mutation-report.json \
+            --require-file personal_algorithm/ranking.py \
+            --require-file personal_algorithm/ingest.py
+
+      - name: Upload mutation report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: mutation-report-${{ github.sha }}
+          path: |
+            mutation-report.raw.json
+            mutation-report.json
+          if-no-files-found: warn
+          retention-days: 14

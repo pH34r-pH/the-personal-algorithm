@@ -57,28 +57,28 @@ jobs:
           mapfile -t docs < "$RUNNER_TEMP/changed-docs.txt"
           markdownlint-cli2 --config .markdownlint-cli2.mjs "${docs[@]}"
 
-      - name: Check links in changed Markdown
+      - name: Install lychee v0.20.1
         if: steps.changed-docs.outputs.has_docs == 'true'
         uses: lycheeverse/lychee-action@v2.9.0
         with:
           lycheeVersion: v0.20.1
+          args: --version
           fail: true
           failIfEmpty: false
-          args: >-
-            --offline --verbose --no-progress
-            $(cat "$RUNNER_TEMP/changed-docs.txt")
+
+      - name: Check links in changed Markdown
+        if: steps.changed-docs.outputs.has_docs == 'true'
+        run: |
+          set -euo pipefail
+          mapfile -t docs < "$RUNNER_TEMP/changed-docs.txt"
+          "$RUNNER_TEMP/lychee/bin/lychee" --offline --verbose --no-progress "${docs[@]}"
 
       - name: Prove the negative broken-link fixture
         if: steps.changed-docs.outputs.has_docs == 'true'
-        id: negative-link-fixture
-        continue-on-error: true
-        uses: lycheeverse/lychee-action@v2.9.0
-        with:
-          lycheeVersion: v0.20.1
-          fail: true
-          failIfEmpty: true
-          args: --offline --no-progress tests/fixtures/documentation-hygiene/broken-link.md
-
-      - name: Assert the negative fixture failed
-        if: steps.changed-docs.outputs.has_docs == 'true' && always()
-        run: test "${{ steps.negative-link-fixture.outcome }}" = failure
+        run: |
+          set -euo pipefail
+          if "$RUNNER_TEMP/lychee/bin/lychee" --offline --no-progress tests/fixtures/documentation-hygiene/broken-link.md; then
+            echo "::error::the broken-link fixture unexpectedly passed"
+            exit 1
+          fi
+          echo "Broken-link fixture fails as expected."

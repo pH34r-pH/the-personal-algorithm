@@ -51,6 +51,7 @@ LIVING_DOC_PREFIXES = (
     "docs/",
     "deploy/",
 )
+TEST_LIVING_DIRECTORY = Path("docs")
 HISTORY_OR_DERIVED_PREFIXES = (
     "docs/roadmap.md",
     "docs/m0.md",
@@ -112,7 +113,7 @@ def under_prefix(path: str, prefix: str) -> bool:
 def is_living_doc(path: str) -> bool:
     if Path(path).name == "AGENTS.md":
         return True
-    if path.startswith("living/") or path in LIVING_DOC_FILES:
+    if path in LIVING_DOC_FILES:
         return True
     if any(under_prefix(path, prefix) for prefix in HISTORY_OR_DERIVED_PREFIXES):
         return False
@@ -194,20 +195,21 @@ def _assert_code_only(repo: Path, first: str) -> None:
 
 
 def _assert_rename_and_numeric_evidence(repo: Path, first: str) -> None:
-    (repo / "living").mkdir()
-    subprocess.run(["git", "-C", str(repo), "mv", "README.md", "living/014-descriptive-topic.md"], check=True)
+    rename_path = TEST_LIVING_DIRECTORY / "014 descriptive topic.md"
+    (repo / rename_path).parent.mkdir(parents=True)
+    subprocess.run(["git", "-C", str(repo), "mv", "README.md", rename_path.as_posix()], check=True)
     commit(repo, "rename")
     entries, errors = run_check(repo, first, "HEAD")
-    if errors or not any(status.startswith("R") and path == "living/014-descriptive-topic.md" for status, path, _ in entries):
+    if errors or not any(status.startswith("R") and path == rename_path.as_posix() for status, path, _ in entries):
         raise AssertionError(f"rename regression: entries={entries!r}, errors={errors!r}")
-    if selected_docs(entries) != ["living/014-descriptive-topic.md"]:
+    if selected_docs(entries) != [rename_path.as_posix()]:
         raise AssertionError(f"unexpected rename selection: {selected_docs(entries)!r}")
 
     (repo / "evidence" / "2026").mkdir(parents=True)
     (repo / "evidence" / "2026" / "123.json").write_text("{}\n", encoding="utf-8")
     commit(repo, "numeric evidence")
     entries, errors = run_check(repo, first, "HEAD")
-    if errors or selected_docs(entries) != ["living/014-descriptive-topic.md"]:
+    if errors or selected_docs(entries) != [rename_path.as_posix()]:
         raise AssertionError(f"numeric evidence regression: entries={entries!r}, errors={errors!r}")
 
 
@@ -228,7 +230,7 @@ def _assert_derived_products(repo: Path, first: str) -> None:
 
 
 def _assert_rejections(repo: Path, first: str) -> None:
-    (repo / "living" / "issue-123.md").write_text("# Bad name\n", encoding="utf-8")
+    (repo / TEST_LIVING_DIRECTORY / "issue-123.md").write_text("# Bad name\n", encoding="utf-8")
     (repo / "evidence" / "2026" / "cache").mkdir(parents=True)
     (repo / "evidence" / "2026" / "cache" / "receipt.md").write_text("# Generated\n", encoding="utf-8")
     (repo / "evidence" / "2026" / "receipt.tmp").write_text("temporary\n", encoding="utf-8")
@@ -244,7 +246,7 @@ def _assert_rejections(repo: Path, first: str) -> None:
 
 
 def _assert_control_path(repo: Path, first: str) -> None:
-    (repo / "living\ncontrol.md").write_text("# Control\n", encoding="utf-8")
+    (repo / TEST_LIVING_DIRECTORY / "control\n.md").write_text("# Control\n", encoding="utf-8")
     commit(repo, "control character")
     try:
         diff_entries(repo, first, "HEAD")

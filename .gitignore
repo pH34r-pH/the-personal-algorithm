@@ -9,6 +9,8 @@ secrets/
 *.sqlite3
 __pycache__/
 .pytest_cache/
+.irradiate/
+mutants/
 .venv/
 node_modules/
 dist/

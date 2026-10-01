@@ -47,5 +47,8 @@ def test_configured_feeds_are_deduplicated_ranked_and_persisted():
 
     assert len(ranked) == 3
     assert [item.candidate.id for item in ranked[:2]] == ["a", "shared"]
+    assert [item.score for item in ranked] == [1.0, 1.0, 0.1]
+    assert all(item.policy_version == "ingest-v1" for item in ranked)
+    assert all(item.ranked_at == NOW for item in ranked)
     assert store.connection.execute("SELECT COUNT(*) FROM candidates").fetchone()[0] == 3
     assert store.connection.execute("SELECT COUNT(*) FROM rankings").fetchone()[0] == 3

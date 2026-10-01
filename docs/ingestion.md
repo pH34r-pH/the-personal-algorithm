@@ -28,16 +28,20 @@ changing either orchestration or reference-ranking behavior:
 
 ```sh
 irradiate run src/personal_algorithm/ranking.py src/personal_algorithm/ingest.py \
-  --tests-dir tests --isolate --report json --output mutation-report.json
-python tools/validate_mutation_report.py mutation-report.json \
+  --tests-dir tests --isolate --report json --output mutation-report.raw.json
+python tools/validate_mutation_report.py mutation-report.raw.json \
+  --normalize-to mutation-report.json \
   --require-file personal_algorithm/ranking.py \
   --require-file personal_algorithm/ingest.py
 ```
 
-The report uses Stryker Mutation Testing Elements schema v2. The validator checks
-the required report structure and status values; it does not impose a score gate.
-That leaves equivalent or noisy mutants available for characterization before a
-future ratchet is considered.
+The normalized report uses the pinned official Stryker Mutation Testing Elements
+schema v2. The raw report is retained for provenance. The validator rejects
+ambiguous duplicate IDs; it only reconciles the known irradiate 0.4.3
+zero-duration `NoCoverage` export duplicate and records that decision in the
+report configuration. It does not impose a score gate, leaving equivalent or
+noisy mutants available for characterization before a future ratchet is
+considered.
 
 ## Why keep orchestration thin?
 

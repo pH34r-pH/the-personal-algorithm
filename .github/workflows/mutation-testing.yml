@@ -7,6 +7,7 @@ on:
       - "src/personal_algorithm/ingest.py"
       - "tests/**"
       - "tools/validate_mutation_report.py"
+      - "tools/mutation-testing-report-schema-v2.json"
       - "pyproject.toml"
       - ".github/workflows/mutation-testing.yml"
   workflow_dispatch:
@@ -38,11 +39,12 @@ jobs:
             --workers 2 \
             --isolate \
             --report json \
-            --output mutation-report.json
+            --output mutation-report.raw.json
 
-      - name: Validate Stryker report
+      - name: Reconcile and validate Stryker report
         run: |
-          python tools/validate_mutation_report.py mutation-report.json \
+          python tools/validate_mutation_report.py mutation-report.raw.json \
+            --normalize-to mutation-report.json \
             --require-file personal_algorithm/ranking.py \
             --require-file personal_algorithm/ingest.py
 
@@ -51,6 +53,8 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: mutation-report-${{ github.sha }}
-          path: mutation-report.json
+          path: |
+            mutation-report.raw.json
+            mutation-report.json
           if-no-files-found: warn
           retention-days: 14

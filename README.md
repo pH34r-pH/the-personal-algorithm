@@ -1,5 +1,8 @@
 # The Personal Algorithm
 
+[Repository map and validation](AGENTS.md) documents the current data flow, storage/auth
+boundaries, directory owners, and exact checks.
+
 [![CI](https://github.com/pH34r-pH/the-personal-algorithm/actions/workflows/ci.yml/badge.svg)](https://github.com/pH34r-pH/the-personal-algorithm/actions/workflows/ci.yml)
 [![License](https://img.shields.io/github/license/pH34r-pH/the-personal-algorithm)](LICENSE)
 

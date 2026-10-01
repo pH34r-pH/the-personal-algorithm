@@ -169,6 +169,92 @@ def commit(root: Path, message: str) -> None:
     subprocess.run(["git", "-C", str(root), "commit", "-qm", message], check=True)
 
 
+def _assert_code_only(repo: Path, first: str) -> None:
+    (repo / "module.py").write_text("value = 1\n", encoding="utf-8")
+    commit(repo, "code-only")
+    result = subprocess.run(
+        [
+            sys.executable,
+            str(Path(__file__).resolve()),
+            "--root",
+            str(repo),
+            "--base",
+            first,
+            "--head",
+            "HEAD",
+            "--print-docs",
+        ],
+        cwd=repo,
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    if result.stdout != "":
+        raise AssertionError(f"code-only selection was not empty: {result.stdout!r}")
+
+
+def _assert_rename_and_numeric_evidence(repo: Path, first: str) -> None:
+    (repo / "living").mkdir()
+    subprocess.run(["git", "-C", str(repo), "mv", "README.md", "living/014-descriptive-topic.md"], check=True)
+    commit(repo, "rename")
+    entries, errors = run_check(repo, first, "HEAD")
+    if errors or not any(status.startswith("R") and path == "living/014-descriptive-topic.md" for status, path, _ in entries):
+        raise AssertionError(f"rename regression: entries={entries!r}, errors={errors!r}")
+    if selected_docs(entries) != ["living/014-descriptive-topic.md"]:
+        raise AssertionError(f"unexpected rename selection: {selected_docs(entries)!r}")
+
+    (repo / "evidence" / "2026").mkdir(parents=True)
+    (repo / "evidence" / "2026" / "123.json").write_text("{}\n", encoding="utf-8")
+    commit(repo, "numeric evidence")
+    entries, errors = run_check(repo, first, "HEAD")
+    if errors or selected_docs(entries) != ["living/014-descriptive-topic.md"]:
+        raise AssertionError(f"numeric evidence regression: entries={entries!r}, errors={errors!r}")
+
+
+def _assert_derived_products(repo: Path, first: str) -> None:
+    (repo / "graphify-out").mkdir()
+    (repo / "graphify-out" / "GRAPH_REPORT.md").write_text("# Derived report\n", encoding="utf-8")
+    commit(repo, "derived report")
+    entries, errors = run_check(repo, first, "HEAD")
+    if errors or "graphify-out/GRAPH_REPORT.md" in selected_docs(entries):
+        raise AssertionError(f"derived report classification regression: entries={entries!r}, errors={errors!r}")
+
+    (repo / "graphify-out" / "cache").mkdir()
+    (repo / "graphify-out" / "cache" / "generated.md").write_text("# Cache\n", encoding="utf-8")
+    commit(repo, "derived cache")
+    _, errors = run_check(repo, first, "HEAD")
+    if not any("artifact" in error for error in errors):
+        raise AssertionError(f"derived cache was not rejected: {errors!r}")
+
+
+def _assert_rejections(repo: Path, first: str) -> None:
+    (repo / "living" / "issue-123.md").write_text("# Bad name\n", encoding="utf-8")
+    (repo / "evidence" / "2026" / "cache").mkdir(parents=True)
+    (repo / "evidence" / "2026" / "cache" / "receipt.md").write_text("# Generated\n", encoding="utf-8")
+    (repo / "evidence" / "2026" / "receipt.tmp").write_text("temporary\n", encoding="utf-8")
+    (repo / "evidence" / "2026" / "receipt.pyc").write_bytes(b"temporary")
+    commit(repo, "bad paths")
+    _, errors = run_check(repo, first, "HEAD")
+    if not any("issue-123.md" in error for error in errors):
+        raise AssertionError(f"issue-number-only name was not rejected: {errors!r}")
+    if not any("artifact" in error for error in errors):
+        raise AssertionError(f"nested artifact path was not rejected: {errors!r}")
+    if not any("receipt.tmp" in error for error in errors) or not any("receipt.pyc" in error for error in errors):
+        raise AssertionError(f"temporary suffixes were not rejected: {errors!r}")
+
+
+def _assert_control_path(repo: Path, first: str) -> None:
+    (repo / "living\ncontrol.md").write_text("# Control\n", encoding="utf-8")
+    commit(repo, "control character")
+    try:
+        diff_entries(repo, first, "HEAD")
+    except RuntimeError as error:
+        if "control character" not in str(error):
+            raise AssertionError(f"unexpected control-character error: {error}")
+    else:
+        raise AssertionError("control-character path was not rejected")
+
+
 def self_test(root: Path) -> None:
     check_fixture(root)
     with tempfile.TemporaryDirectory(prefix="documentation-hygiene-") as temporary:
@@ -179,68 +265,10 @@ def self_test(root: Path) -> None:
         (repo / "README.md").write_text("# Fixture\n", encoding="utf-8")
         commit(repo, "initial")
         first = git(repo, "rev-parse", "HEAD").decode().strip()
-
-        (repo / "module.py").write_text("value = 1\n", encoding="utf-8")
-        commit(repo, "code-only")
-        result = subprocess.run(
-            [
-                sys.executable,
-                str(Path(__file__).resolve()),
-                "--root",
-                str(repo),
-                "--base",
-                first,
-                "--head",
-                "HEAD",
-                "--print-docs",
-            ],
-            cwd=repo,
-            capture_output=True,
-            text=True,
-            check=True,
-        )
-        if result.stdout != "":
-            raise AssertionError(f"code-only selection was not empty: {result.stdout!r}")
-
-        (repo / "living").mkdir()
-        subprocess.run(["git", "-C", str(repo), "mv", "README.md", "living/014-descriptive-topic.md"], check=True)
-        commit(repo, "rename")
-        entries, errors = run_check(repo, first, "HEAD")
-        if errors or not any(status.startswith("R") and path == "living/014-descriptive-topic.md" for status, path, _ in entries):
-            raise AssertionError(f"rename regression: entries={entries!r}, errors={errors!r}")
-        if selected_docs(entries) != ["living/014-descriptive-topic.md"]:
-            raise AssertionError(f"unexpected rename selection: {selected_docs(entries)!r}")
-
-        (repo / "evidence" / "2026").mkdir(parents=True)
-        (repo / "evidence" / "2026" / "123.json").write_text("{}\n", encoding="utf-8")
-        commit(repo, "numeric evidence")
-        entries, errors = run_check(repo, first, "HEAD")
-        if errors or selected_docs(entries) != ["living/014-descriptive-topic.md"]:
-            raise AssertionError(f"numeric evidence regression: entries={entries!r}, errors={errors!r}")
-
-        (repo / "living" / "issue-123.md").write_text("# Bad name\n", encoding="utf-8")
-        (repo / "evidence" / "2026" / "cache").mkdir(parents=True)
-        (repo / "evidence" / "2026" / "cache" / "receipt.md").write_text("# Generated\n", encoding="utf-8")
-        (repo / "evidence" / "2026" / "receipt.tmp").write_text("temporary\n", encoding="utf-8")
-        (repo / "evidence" / "2026" / "receipt.pyc").write_bytes(b"temporary")
-        commit(repo, "bad paths")
-        _, errors = run_check(repo, first, "HEAD")
-        if not any("issue-123.md" in error for error in errors):
-            raise AssertionError(f"issue-number-only name was not rejected: {errors!r}")
-        if not any("artifact" in error for error in errors):
-            raise AssertionError(f"nested artifact path was not rejected: {errors!r}")
-        if not any("receipt.tmp" in error for error in errors) or not any("receipt.pyc" in error for error in errors):
-            raise AssertionError(f"temporary suffixes were not rejected: {errors!r}")
-
-        (repo / "living\ncontrol.md").write_text("# Control\n", encoding="utf-8")
-        commit(repo, "control character")
-        try:
-            diff_entries(repo, first, "HEAD")
-        except RuntimeError as error:
-            if "control character" not in str(error):
-                raise AssertionError(f"unexpected control-character error: {error}")
-        else:
-            raise AssertionError("control-character path was not rejected")
+        _assert_code_only(repo, first)
+        _assert_rename_and_numeric_evidence(repo, first)
+        _assert_rejections(repo, first)
+        _assert_control_path(repo, first)
 
 
 def main() -> int:

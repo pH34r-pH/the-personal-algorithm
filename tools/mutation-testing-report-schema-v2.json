@@ -43,7 +43,9 @@
                 "coveredBy": {
                   "type": "array",
                   "description": "The test ids that covered this mutant. If a mutation testing framework doesn't measure this information, it can simply be left out.",
-                  "items": {"type": "string"}
+                  "items": {
+                    "type": "string"
+                  }
                 },
                 "description": {
                   "type": "string",
@@ -62,9 +64,13 @@
                 "killedBy": {
                   "type": "array",
                   "description": "The test ids that killed this mutant. It is a best practice to \"bail\" on first failing test, in which case you can fill this array with that one test.",
-                  "items": {"type": "string"}
+                  "items": {
+                    "type": "string"
+                  }
                 },
-                "location": {"$ref": "#/definitions/location"},
+                "location": {
+                  "$ref": "#/definitions/location"
+                },
                 "mutatorName": {
                   "type": "string",
                   "description": "Category of the mutation.",
@@ -115,7 +121,7 @@
         "required": ["tests"],
         "properties": {
           "source": {
-            "description": "Full source code of the test file, this is used to display the source in the report.",
+            "description": "Full source code of the test file, this can be used to display in the report.",
             "type": "string"
           },
           "tests": {
@@ -134,7 +140,9 @@
                   "type": "string",
                   "description": "Name of the test, used to display the test."
                 },
-                "location": {"$ref": "#/definitions/openEndLocation"}
+                "location": {
+                  "$ref": "#/definitions/openEndLocation"
+                }
               }
             }
           }
@@ -174,9 +182,18 @@
       "description": "The performance statistics per phase. Total time should be roughly equal to the sum of all these.",
       "required": ["setup", "initialRun", "mutation"],
       "properties": {
-        "setup": {"type": "number", "description": "Time it took to run the setup phase in milliseconds."},
-        "initialRun": {"type": "number", "description": "Time it took to run the initial test phase (dry-run) in milliseconds."},
-        "mutation": {"type": "number", "description": "Time it took to run the mutation test phase in milliseconds."}
+        "setup": {
+          "type": "number",
+          "description": "Time it took to run the setup phase in milliseconds."
+        },
+        "initialRun": {
+          "type": "number",
+          "description": "Time it took to run the initial test phase (dry-run) in milliseconds."
+        },
+        "mutation": {
+          "type": "number",
+          "description": "Time it took to run the mutation test phase in milliseconds."
+        }
       }
     },
     "framework": {
@@ -185,23 +202,39 @@
       "description": "Extra information about the framework used",
       "required": ["name"],
       "properties": {
-        "name": {"type": "string", "description": "Name of the framework used."},
-        "version": {"type": "string", "description": "Version of the framework."},
+        "name": {
+          "type": "string",
+          "description": "Name of the framework used.",
+          "examples": ["Stryker", "Stryker4s", "Stryker.NET", "Infection PHP", "Pitest"]
+        },
+        "version": {
+          "type": "string",
+          "description": "Version of the framework."
+        },
         "branding": {
           "type": "object",
           "title": "BrandingInformation",
           "description": "Extra branding information about the framework used.",
           "required": ["homepageUrl"],
           "properties": {
-            "homepageUrl": {"type": "string", "format": "uri", "description": "URL to the homepage for the framework."},
-            "imageUrl": {"type": "string", "description": "URL to an image for the framework, can be a data URL."}
+            "homepageUrl": {
+              "type": "string",
+              "format": "uri",
+              "description": "URL to the homepage of the framework."
+            },
+            "imageUrl": {
+              "type": "string",
+              "description": "URL to an image for the framework, can be a data URL."
+            }
           }
         },
         "dependencies": {
           "type": "object",
           "title": "Dependencies",
           "description": "Dependencies used by the framework. Key-value pair of dependencies and their versions.",
-          "additionalProperties": {"type": "string"}
+          "additionalProperties": {
+            "type": "string"
+          }
         }
       }
     },
@@ -211,15 +244,30 @@
       "description": "Information about the system that performed mutation testing.",
       "required": ["ci"],
       "properties": {
-        "ci": {"description": "Did mutation testing run in a Continuous Integration environment (pipeline)?", "type": "boolean"},
+        "ci": {
+          "description": "Did mutation testing run in a Continuous Integration environment (pipeline)? Note that there is no way of knowing this for sure. It's done on a best-effort basis.",
+          "type": "boolean"
+        },
         "os": {
           "type": "object",
           "title": "OSInformation",
           "required": ["platform"],
           "properties": {
-            "description": {"type": "string"},
-            "platform": {"type": "string"},
-            "version": {"type": "string"}
+            "description": {
+              "type": "string",
+              "description": "Human-readable description of the OS",
+              "examples": ["Windows 10 Pro", "Debian Buster", "Ubuntu 20.04.1 LTS"]
+            },
+            "platform": {
+              "type": "string",
+              "description": "Platform identifier",
+              "examples": ["linux", "win32"]
+            },
+            "version": {
+              "type": "string",
+              "description": "Version of the OS or distribution",
+              "examples": ["10.0.19041"]
+            }
           }
         },
         "cpu": {
@@ -227,16 +275,29 @@
           "title": "CpuInformation",
           "required": ["logicalCores"],
           "properties": {
-            "baseClock": {"type": "number"},
-            "logicalCores": {"type": "number"},
-            "model": {"type": "string"}
+            "baseClock": {
+              "type": "number",
+              "description": "Clock speed in MHz"
+            },
+            "logicalCores": {
+              "type": "number"
+            },
+            "model": {
+              "type": "string",
+              "examples": ["Intel(R) Core(TM) i9-9880H CPU @ 2.30GHz"]
+            }
           }
         },
         "ram": {
           "title": "RamInformation",
           "type": "object",
           "required": ["total"],
-          "properties": {"total": {"type": "number"}}
+          "properties": {
+            "total": {
+              "type": "number",
+              "description": "The total RAM of the system that performed mutation testing in MB."
+            }
+          }
         }
       }
     }
@@ -248,8 +309,16 @@
       "description": "Position of a mutation. Both line and column start at one.",
       "required": ["line", "column"],
       "properties": {
-        "line": {"type": "integer", "minimum": 1},
-        "column": {"type": "integer", "minimum": 1}
+        "line": {
+          "type": "integer",
+          "minimum": 1,
+          "examples": [4]
+        },
+        "column": {
+          "type": "integer",
+          "minimum": 1,
+          "examples": [3]
+        }
       }
     },
     "location": {
@@ -258,18 +327,26 @@
       "description": "A location with start and end. Start is inclusive, end is exclusive.",
       "required": ["start", "end"],
       "properties": {
-        "start": {"$ref": "#/definitions/position"},
-        "end": {"$ref": "#/definitions/position"}
+        "start": {
+          "$ref": "#/definitions/position"
+        },
+        "end": {
+          "$ref": "#/definitions/position"
+        }
       }
     },
     "openEndLocation": {
       "type": "object",
       "title": "OpenEndLocation",
-      "description": "A location where end is not required. Start is inclusive, end is exclusive.",
+      "description": "A location where \"end\" is not required. Start is inclusive, end is exclusive.",
       "required": ["start"],
       "properties": {
-        "start": {"$ref": "#/definitions/position"},
-        "end": {"$ref": "#/definitions/position"}
+        "start": {
+          "$ref": "#/definitions/position"
+        },
+        "end": {
+          "$ref": "#/definitions/position"
+        }
       }
     }
   }

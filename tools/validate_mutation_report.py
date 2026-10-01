@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import argparse
 import copy
+import hashlib
 import json
 from collections import Counter, defaultdict
 from dataclasses import dataclass
@@ -18,11 +19,16 @@ from typing import Any
 
 SCHEMA_PATH = Path(__file__).with_name("mutation-testing-report-schema-v2.json")
 SCHEMA_COMMIT = "a54fe7efa9904c8f3574b969482c23581d031c91"
+SCHEMA_SHA256 = "404575e9264686dbf85c399f6531fdb489bebc3146e7e1d793b8083bc6a041ae"
 SCHEMA_SOURCE = (
     "https://raw.githubusercontent.com/stryker-mutator/mutation-testing-elements/"
     f"{SCHEMA_COMMIT}/packages/report-schema/src/mutation-testing-report-schema.json"
 )
 KNOWN_DUPLICATE_RULE = "irradiate-0.4.3-zero-duration-nocoverage-export-duplicate"
+KNOWN_ENGINE = "irradiate"
+KNOWN_VERSION = "0.4.3"
+KNOWN_MUTATOR = "decorator_removal: @staticmethod"
+KNOWN_DESCRIPTION = "replaced `    @staticmethod\n` with ``"
 TESTED_STATUSES = {"Killed"}
 
 
@@ -45,7 +51,10 @@ def _require(condition: bool, message: str) -> None:
 
 def _official_schema() -> dict[str, Any]:
     try:
-        return json.loads(SCHEMA_PATH.read_text(encoding="utf-8"))
+        schema_bytes = SCHEMA_PATH.read_bytes()
+        actual_sha256 = hashlib.sha256(schema_bytes).hexdigest()
+        _require(actual_sha256 == SCHEMA_SHA256, "vendored Stryker schema checksum mismatch")
+        return json.loads(schema_bytes)
     except (OSError, json.JSONDecodeError) as exc:
         raise ReportError(f"cannot load vendored Stryker schema: {exc}") from exc
 
@@ -90,7 +99,13 @@ def _duplicate_groups(report: dict[str, Any]) -> dict[str, list[tuple[str, dict[
 def _resolve_known_duplicate(
     mutant_id: str,
     group: list[tuple[str, dict[str, Any]]],
+    *,
+    framework: dict[str, Any],
 ) -> tuple[dict[str, Any], dict[str, Any]]:
+    _require(
+        framework.get("name") == KNOWN_ENGINE and framework.get("version") == KNOWN_VERSION,
+        "known duplicate reconciliation requires irradiate 0.4.3",
+    )
     files = {filename for filename, _ in group}
     _require(len(files) == 1, f"ambiguous duplicate mutant id {mutant_id!r} spans files")
     identities = {_mutant_identity(filename, mutant) for filename, mutant in group}
@@ -99,6 +114,15 @@ def _resolve_known_duplicate(
         f"ambiguous duplicate mutant id {mutant_id!r} has different mutation identities",
     )
     _require(len(group) == 2, f"ambiguous duplicate mutant id {mutant_id!r} has {len(group)} records")
+    _require(
+        all(
+            mutant["mutatorName"] == KNOWN_MUTATOR
+            and mutant.get("description") == KNOWN_DESCRIPTION
+            and mutant.get("replacement") == ""
+            for _, mutant in group
+        ),
+        f"ambiguous duplicate mutant id {mutant_id!r} is not the known staticmethod-removal signature",
+    )
 
     no_coverage = [mutant for _, mutant in group if mutant["status"] == "NoCoverage"]
     tested = [mutant for _, mutant in group if mutant["status"] in TESTED_STATUSES]
@@ -115,8 +139,8 @@ def _resolve_known_duplicate(
         "retained_status": retained["status"],
         "discarded_status": "NoCoverage",
         "discarded_duration": no_coverage[0]["duration"],
-        "source_framework": "irradiate",
-        "source_version": "0.4.3",
+        "source_framework": KNOWN_ENGINE,
+        "source_version": KNOWN_VERSION,
     }
     return retained, provenance
 
@@ -186,7 +210,11 @@ def normalize_report(
     reconciled: list[dict[str, Any]] = []
     retained_by_id: dict[str, dict[str, Any]] = {}
     for mutant_id, group in duplicate_groups.items():
-        retained, provenance = _resolve_known_duplicate(mutant_id, group)
+        retained, provenance = _resolve_known_duplicate(
+            mutant_id,
+            group,
+            framework=normalized["framework"],
+        )
         retained_by_id[mutant_id] = retained
         reconciled.append(provenance)
 

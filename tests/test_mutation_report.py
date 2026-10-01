@@ -58,14 +58,7 @@ def test_validate_report_rejects_nonstandard_status():
 
 
 def test_normalize_report_records_known_irradiate_duplicate_provenance():
-    report = _report()
-    mutant = report["files"]["personal_algorithm/ranking.py"]["mutants"][0]
-    mutant["id"] = "duplicate-1"
-    mutant["duration"] = 12
-    duplicate = deepcopy(mutant)
-    duplicate["status"] = "NoCoverage"
-    duplicate["duration"] = 0
-    report["files"]["personal_algorithm/ranking.py"]["mutants"].append(duplicate)
+    report = _known_duplicate_report()
 
     normalized, summary = normalize_report(
         report,
@@ -80,12 +73,45 @@ def test_normalize_report_records_known_irradiate_duplicate_provenance():
     validate_report(normalized, required_files=("personal_algorithm/ranking.py",))
 
 
-def test_normalize_report_rejects_ambiguous_duplicate_statuses():
+def _known_duplicate_report():
     report = _report()
     mutant = report["files"]["personal_algorithm/ranking.py"]["mutants"][0]
+    mutant["id"] = "duplicate-1"
+    mutant["duration"] = 12
+    mutant["description"] = "replaced `    @staticmethod\n` with ``"
+    mutant["mutatorName"] = "decorator_removal: @staticmethod"
+    mutant["replacement"] = ""
     duplicate = deepcopy(mutant)
-    duplicate["status"] = "Survived"
+    duplicate["status"] = "NoCoverage"
+    duplicate["duration"] = 0
     report["files"]["personal_algorithm/ranking.py"]["mutants"].append(duplicate)
+    return report
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [("name", "mutmut"), ("version", "0.4.2")],
+)
+def test_normalize_report_rejects_wrong_engine_or_version(field, value):
+    report = _known_duplicate_report()
+    report["framework"][field] = value
+
+    with pytest.raises(ValueError, match="requires irradiate 0.4.3"):
+        normalize_report(report)
+
+
+def test_normalize_report_rejects_wrong_mutator_signature():
+    report = _known_duplicate_report()
+    for mutant in report["files"]["personal_algorithm/ranking.py"]["mutants"]:
+        mutant["mutatorName"] = "binop_swap"
+
+    with pytest.raises(ValueError, match="known staticmethod-removal signature"):
+        normalize_report(report)
+
+
+def test_normalize_report_rejects_ambiguous_duplicate_statuses():
+    report = _known_duplicate_report()
+    report["files"]["personal_algorithm/ranking.py"]["mutants"][1]["status"] = "Survived"
 
     with pytest.raises(ValueError, match="ambiguous duplicate mutant id"):
         normalize_report(report)

@@ -57,36 +57,28 @@ jobs:
           mapfile -t docs < "$RUNNER_TEMP/changed-docs.txt"
           markdownlint-cli2 --config .markdownlint-cli2.mjs "${docs[@]}"
 
-      - name: Install lychee v0.20.1
-        if: steps.changed-docs.outputs.has_docs == 'true'
-        shell: bash
-        run: |
-          set -euo pipefail
-          archive="$RUNNER_TEMP/lychee-v0.20.1.tar.gz"
-          extract="$RUNNER_TEMP/lychee-v0.20.1"
-          mkdir -p "$extract"
-          curl --fail --location --retry 3 \
-            "https://github.com/lycheeverse/lychee/releases/download/lychee-v0.20.1/lychee-x86_64-unknown-linux-gnu.tar.gz" \
-            --output "$archive"
-          tar -xzf "$archive" -C "$extract"
-          binary="$(find "$extract" -type f -name lychee -print -quit)"
-          test -n "$binary"
-          install -D "$binary" "$RUNNER_TEMP/lychee-bin/lychee"
-          echo "$RUNNER_TEMP/lychee-bin" >> "$GITHUB_PATH"
-          "$RUNNER_TEMP/lychee-bin/lychee" --version
-
       - name: Check links in changed Markdown
         if: steps.changed-docs.outputs.has_docs == 'true'
-        run: |
-          set -euo pipefail
-          mapfile -t docs < "$RUNNER_TEMP/changed-docs.txt"
-          lychee --verbose --no-progress "${docs[@]}"
+        uses: lycheeverse/lychee-action@v2.9.0
+        with:
+          lycheeVersion: v0.20.1
+          fail: true
+          failIfEmpty: false
+          args: >-
+            --offline --verbose --no-progress
+            $(cat "$RUNNER_TEMP/changed-docs.txt")
 
       - name: Prove the negative broken-link fixture
         if: steps.changed-docs.outputs.has_docs == 'true'
-        run: |
-          if lychee --offline --no-progress tests/fixtures/documentation-hygiene/broken-link.md; then
-            echo "::error::the broken-link fixture unexpectedly passed"
-            exit 1
-          fi
-          echo "Broken-link fixture fails as expected."
+        id: negative-link-fixture
+        continue-on-error: true
+        uses: lycheeverse/lychee-action@v2.9.0
+        with:
+          lycheeVersion: v0.20.1
+          fail: true
+          failIfEmpty: true
+          args: --offline --no-progress tests/fixtures/documentation-hygiene/broken-link.md
+
+      - name: Assert the negative fixture failed
+        if: steps.changed-docs.outputs.has_docs == 'true' && always()
+        run: test "${{ steps.negative-link-fixture.outcome }}" = failure

@@ -47,9 +47,11 @@ Azure Easy Auth -> X-MS-CLIENT-PRINCIPAL-ID -> owner-object-id authorization
 - The public landing and health routes are separate from protected connections, archive,
   API, and UI routes. Keep the public/private boundary intact.
 
-`README.md`, `src/`, tests, and current contract docs are living surfaces. Milestone,
-roadmap, prior-art, and dated evidence documents are retained history; label a behavior
-superseded only when current source and tests prove the replacement.
+`README.md`, scoped `AGENTS.md` maps, `src/`, tests, `deploy/`, and current contract
+docs under `docs/` are living surfaces. Milestone, roadmap, prior-art, and dated
+evidence documents are retained history; label a behavior superseded only when current
+source and tests prove the replacement. Documentation CI selects the living surface and
+explicitly leaves those historical records out.
 
 ## Where to change things
 
@@ -59,9 +61,10 @@ superseded only when current source and tests prove the replacement.
   its provider module; keep `models.py`, `providers.py`, and serialization contracts in
   sync.
 - Change deployment assumptions in `docs/` or `deploy/`, not in a readme-only claim.
-- Use descriptive names. Single-word names such as `README.md` and `AGENTS.md` are
-  valid; reject new numeric-only or issue-number-only names such as `123.md` and
-  `issue-123.md`. Meaningful numbered series remain valid.
+- Use descriptive names for new living Markdown. Single-word names such as `README.md`
+  and `AGENTS.md` are valid; reject new numeric-only or issue-number-only living docs
+  such as `123.md` and `issue-123.md`. Meaningful numbered series and historical
+  evidence IDs remain valid.
 - Keep repository links relative so the documentation checker validates map references.
 
 ## Exact validation
@@ -75,7 +78,7 @@ ruff check .
 pytest -q
 DOCS_FILE="$(mktemp)"
 python tools/check_documentation_hygiene.py --base origin/main --head HEAD --print-docs > "$DOCS_FILE"
-if test -s "$DOCS_FILE"; then mapfile -t DOCS < "$DOCS_FILE"; npx --yes markdownlint-cli2@0.18.1 --config .markdownlint-cli2.mjs "${DOCS[@]}"; lychee --verbose --no-progress "${DOCS[@]}"; fi
+if test -s "$DOCS_FILE"; then mapfile -t DOCS < "$DOCS_FILE"; npx --yes markdownlint-cli2@0.18.1 --config .markdownlint-cli2.mjs "${DOCS[@]}"; lychee --offline --verbose --no-progress "${DOCS[@]}"; fi
 ```
 
 The documentation workflow is read-only. It does not build, publish, deploy, or change

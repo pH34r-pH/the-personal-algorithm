@@ -3,8 +3,6 @@ import pytest
 from personal_algorithm.provider_registry import ProviderRegistry
 from personal_algorithm.providers import (
     BootstrapCheckpoint,
-    Connection,
-    ConnectionStatus,
     ProviderCapability,
     ProviderDescriptor,
 )

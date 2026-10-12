@@ -6,9 +6,7 @@ boundaries, directory owners, and exact checks.
 [![CI](https://github.com/pH34r-pH/the-personal-algorithm/actions/workflows/ci.yml/badge.svg)](https://github.com/pH34r-pH/the-personal-algorithm/actions/workflows/ci.yml)
 [![License](https://img.shields.io/github/license/pH34r-pH/the-personal-algorithm)](LICENSE)
 
-<p align="center">
-  <img src="docs/assets/hero.webp" alt="The Personal Algorithm — private curation and user-owned ranking" width="100%">
-</p>
+![The Personal Algorithm — private curation and user-owned ranking](docs/assets/hero.png)
 
 **Your feeds. Your history. Your objectives. Your algorithm.**
 

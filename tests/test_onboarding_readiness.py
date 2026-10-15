@@ -7,7 +7,6 @@ from fastapi.testclient import TestClient
 
 from personal_algorithm.application import ApplicationSettings, create_private_app
 
-
 OWNER = {"x-ms-client-principal-id": "owner"}
 CSV = b'id,permalink,date,body\nabc,/r/example/comments/p/title/abc/,2026-10-01T12:00:00Z,Example comment\n'
 

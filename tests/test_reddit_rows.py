@@ -7,7 +7,6 @@ import pytest
 
 from personal_algorithm import reddit_import
 
-
 CSV = 'id,permalink,date,body\nabc,/r/example/comments/post/title/abc/,2026-10-01 12:00:00 UTC,"Hello, café\nsecond line"\n'
 
 

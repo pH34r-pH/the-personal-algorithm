@@ -59,9 +59,11 @@ def _csv_sources(path: Path):
                 total += member.file_size
                 if member.file_size > MAX_MEMBER_BYTES or total > MAX_TOTAL_BYTES:
                     raise ValueError("Reddit CSV data exceeds the parser safety limit")
-                with archive.open(member) as handle:
-                    with io.TextIOWrapper(handle, encoding="utf-8-sig", newline="") as text:
-                        yield member.filename, name, text
+                with (
+                    archive.open(member) as handle,
+                    io.TextIOWrapper(handle, encoding="utf-8-sig", newline="") as text,
+                ):
+                    yield member.filename, name, text
         return
     name = _safe_member(path.name)
     if name not in TABLES:
@@ -114,8 +116,7 @@ def _events(text, table: str, archive_sha: str, member: str):
             raise ValueError("Reddit CSV row has an unexpected number of fields")
         identifier = row["id"].strip().lower()
         prefix = "t1_" if kind == "comment" else "t3_"
-        if identifier.startswith(prefix):
-            identifier = identifier[len(prefix):]
+        identifier = identifier.removeprefix(prefix)
         if not re.fullmatch(r"[a-z0-9]+", identifier):
             raise ValueError("Reddit CSV row has an invalid record identifier")
         # Keep distinct edited observations, but deduplicate identical rows across exports.

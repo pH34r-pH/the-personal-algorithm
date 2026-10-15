@@ -29,9 +29,9 @@ from .ui import create_ui_router
 class ApplicationSettings:
     database: str
     owner_object_id: str
-    key_vault_url: str
-    github_client_id: str
-    github_client_secret: str
+    key_vault_url: str = ""
+    github_client_id: str = ""
+    github_client_secret: str = ""
     database_snapshot: str | None = None
     archive_dir: str = "data/archives"
     archive_max_bytes: int = 50 * 1024 * 1024 * 1024
@@ -41,21 +41,44 @@ class ApplicationSettings:
         required = {
             "database": os.getenv("TPA_DATABASE", "data/personal-algorithm.sqlite3"),
             "owner_object_id": os.getenv("TPA_OWNER_OBJECT_ID", ""),
-            "key_vault_url": os.getenv("TPA_KEY_VAULT_URL", ""),
-            "github_client_id": os.getenv("TPA_GITHUB_CLIENT_ID", ""),
-            "github_client_secret": os.getenv("TPA_GITHUB_CLIENT_SECRET", ""),
         }
         missing = [name for name, value in required.items() if not value]
         if missing:
             raise RuntimeError(f"missing application settings: {', '.join(missing)}")
         return cls(
             **required,
+            key_vault_url=os.getenv("TPA_KEY_VAULT_URL", ""),
+            github_client_id=os.getenv("TPA_GITHUB_CLIENT_ID", ""),
+            github_client_secret=os.getenv("TPA_GITHUB_CLIENT_SECRET", ""),
             database_snapshot=os.getenv("TPA_DATABASE_SNAPSHOT"),
             archive_dir=os.getenv("TPA_ARCHIVE_DIR", "data/archives"),
             archive_max_bytes=int(
                 os.getenv("TPA_ARCHIVE_MAX_BYTES", str(50 * 1024 * 1024 * 1024))
             ),
         )
+
+
+def _build_github(settings, store, credentials, github_http, oauth_http):
+    registry = ProviderRegistry()
+    if not (settings.github_client_id and settings.github_client_secret):
+        return None, registry, None
+    if credentials is None and not settings.key_vault_url:
+        return None, registry, None
+    credential_store = (
+        credentials if credentials is not None
+        else AzureKeyVaultCredentialStore(settings.key_vault_url)
+    )
+    github = GitHubProvider(credential_store, client=github_http)
+    registry.register(github)
+    github_auth = GitHubAuthorization(
+        client_id=settings.github_client_id,
+        client_secret=settings.github_client_secret,
+        credentials=credential_store,
+        states=DurableAuthorizationStateStore(store),
+        http=oauth_http,
+        provider=github,
+    )
+    return github, registry, github_auth
 
 
 def _build_services(settings: ApplicationSettings, credentials, github_http, oauth_http):
@@ -67,17 +90,8 @@ def _build_services(settings: ApplicationSettings, credentials, github_http, oau
     archive_inbox = ArchiveInbox(
         store, settings.archive_dir, max_bytes=settings.archive_max_bytes
     )
-    credential_store = credentials or AzureKeyVaultCredentialStore(settings.key_vault_url)
-    github = GitHubProvider(credential_store, client=github_http)
-    registry = ProviderRegistry()
-    registry.register(github)
-    github_auth = GitHubAuthorization(
-        client_id=settings.github_client_id,
-        client_secret=settings.github_client_secret,
-        credentials=credential_store,
-        states=DurableAuthorizationStateStore(store),
-        http=oauth_http,
-        provider=github,
+    github, registry, github_auth = _build_github(
+        settings, store, credentials, github_http, oauth_http
     )
     return store, connection_store, bootstrap, archive_inbox, github, registry, github_auth
 

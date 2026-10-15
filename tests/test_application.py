@@ -78,7 +78,7 @@ def test_owner_sees_shared_provider_registry_in_api_and_ui(tmp_path):
     assert "Connect GitHub" in ui.text
 
 
-def test_settings_require_private_identity_and_provider_configuration(monkeypatch):
+def test_settings_require_private_identity_but_not_optional_providers(monkeypatch):
     for name in (
         "TPA_OWNER_OBJECT_ID",
         "TPA_KEY_VAULT_URL",
@@ -91,9 +91,15 @@ def test_settings_require_private_identity_and_provider_configuration(monkeypatc
         ApplicationSettings.from_env()
     except RuntimeError as exc:
         assert "owner_object_id" in str(exc)
-        assert "key_vault_url" in str(exc)
+        assert "key_vault_url" not in str(exc)
     else:
         raise AssertionError("missing private application settings were accepted")
+
+    monkeypatch.setenv("TPA_OWNER_OBJECT_ID", "owner-id")
+    settings = ApplicationSettings.from_env()
+    assert settings.github_client_id == ""
+    assert settings.github_client_secret == ""
+    assert settings.key_vault_url == ""
 
 
 def test_public_landing_describes_project_without_auth(tmp_path):

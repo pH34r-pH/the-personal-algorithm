@@ -6,8 +6,8 @@ from dataclasses import asdict
 
 from fastapi import APIRouter, Header, HTTPException, Request
 
+from .archive_importers import ARCHIVE_IMPORTERS, IMPORT_COVERAGE
 from .archives import ArchiveInbox
-from .spotify_import import import_spotify_history
 
 
 def create_archive_router(inbox: ArchiveInbox) -> APIRouter:
@@ -39,18 +39,20 @@ def create_archive_router(inbox: ArchiveInbox) -> APIRouter:
         if record is None:
             raise HTTPException(status_code=404, detail="archive not found")
         provider = record.detected_provider or record.provider_hint
-        if provider != "spotify":
+        importer = ARCHIVE_IMPORTERS.get(provider)
+        if importer is None:
             raise HTTPException(
                 status_code=409,
                 detail="semantic importer is not available for this archive yet",
             )
         try:
-            summary = import_spotify_history(inbox, inbox.store, record)
+            summary = importer(inbox, inbox.store, record)
         except ValueError as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
         return {
-            "provider": "spotify",
+            "provider": provider,
             "status": "imported",
+            "coverage": IMPORT_COVERAGE[provider],
             "summary": asdict(summary),
         }
 
@@ -60,4 +62,7 @@ def create_archive_router(inbox: ArchiveInbox) -> APIRouter:
 def _record(record) -> dict:
     value = asdict(record)
     value["received_at"] = record.received_at.isoformat()
+    provider = record.detected_provider or record.provider_hint
+    value["import_available"] = provider in ARCHIVE_IMPORTERS
+    value["import_coverage"] = IMPORT_COVERAGE.get(provider, "Retained only; parser not implemented")
     return value

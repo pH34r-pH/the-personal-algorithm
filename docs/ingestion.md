@@ -21,6 +21,16 @@ For each run it:
 
 The function does not own scheduling, credentials, UI state, or policy editing. Those remain separate concerns.
 
+## Local message evidence
+
+`personal_algorithm.message_import.import_sent_messages` accepts a structured Pixel
+message JSONL export and a `Store`. It only imports records explicitly labeled `sent`,
+retains source-file digest and row position, and omits recipient details and media.
+The input and database are private instance data and must remain outside this public
+repository. Source direction labels and device coverage are not independently verified.
+Stored messages are evidence only; the importer does not change ranking policy or infer
+preferences. The function is an offline API, not a live device or web endpoint.
+
 ## Deterministic regression checks
 
 The ranking and ingestion contract has a bounded mutation baseline. Run it after

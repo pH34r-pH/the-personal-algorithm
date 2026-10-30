@@ -162,8 +162,8 @@ def test_non_spotify_archive_waits_for_its_parser(tmp_path):
         "/archives/upload",
         content=b"[]",
         headers={
-            "x-archive-filename": "takeout.json",
-            "x-provider-hint": "google",
+            "x-archive-filename": "x-export.json",
+            "x-provider-hint": "x",
         },
     ).json()
 

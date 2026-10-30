@@ -11,7 +11,7 @@ def onboarding_status(registry, connections, archives) -> dict:
     providers = []
     for provider in ("github", "google", "spotify", "reddit", "messages", "x", "linkedin", "meta", "browser"):
         oauth = "not_implemented"
-        if provider == "github":
+        if provider in {"github", "google", "spotify"}:
             oauth = "configured" if provider in configured else "operator_setup_required"
         connection = connected.get(provider)
         providers.append({

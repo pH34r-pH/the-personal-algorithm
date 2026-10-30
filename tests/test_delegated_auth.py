@@ -62,6 +62,7 @@ def test_oauth_state_token_storage_and_refresh(provider_id):
     assert connection.provider_id == provider_id
     assert 'refresh' not in str(connection)
     assert json.loads(credentials.get(connection.credential_ref))['refresh_token'] == 'refresh'
+    assert 'refresh' not in '\n'.join(states.store.connection.iterdump())
     with pytest.raises(ValueError):
         auth.complete(code='example', state=query['state'][0])
     auth.refresh(connection)

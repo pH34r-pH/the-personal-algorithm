@@ -132,7 +132,7 @@ def _onboarding_body(registry: ProviderRegistry, connections: ConnectionStore, a
         <option value="">Auto-detect</option><option value="google">Google / YouTube</option>
         <option value="spotify">Spotify</option><option value="x">X</option>
         <option value="linkedin">LinkedIn</option><option value="meta">Meta</option>
-        <option value="reddit">Reddit</option><option value="browser">Browser / local</option>
+        <option value="reddit">Reddit</option><option value="messages">Messages JSONL</option><option value="browser">Browser / local</option>
       </select></label>
       <label>Archive or export file<input id="archives" type="file" multiple></label>
       <button id="upload" class="button primary">Store selected files</button>

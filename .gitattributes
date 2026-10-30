@@ -1,0 +1,2 @@
+# The validation tool verifies this vendored schema's exact upstream bytes.
+tools/mutation-testing-report-schema-v2.json -text

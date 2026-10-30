@@ -9,7 +9,7 @@ def onboarding_status(registry, connections, archives) -> dict:
     configured = {item.id for item in registry.descriptors()}
     connected = {item.provider_id: item for item in connections.list()}
     providers = []
-    for provider in ("github", "google", "spotify", "reddit", "x", "linkedin", "meta", "browser"):
+    for provider in ("github", "google", "spotify", "reddit", "messages", "x", "linkedin", "meta", "browser"):
         oauth = "not_implemented"
         if provider == "github":
             oauth = "configured" if provider in configured else "operator_setup_required"

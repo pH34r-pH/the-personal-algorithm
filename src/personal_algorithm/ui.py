@@ -114,8 +114,8 @@ def _onboarding_body(registry: ProviderRegistry, connections: ConnectionStore, a
     <section>
       <article class="source-card featured"><div><p class="eyebrow">GOOGLE</p>
       <h2>Google Takeout</h2><p>Preserve YouTube, My Activity, Search, Chrome and other
-      selected products. Archives can be retained now; the Takeout parser and Google OAuth
-      are not implemented.</p></div>
+      selected products. My Activity and YouTube history JSON can be imported;
+      other formats and products are retained without parsing.</p></div>
       <a class="button primary" target="_blank" rel="noopener" href="https://takeout.google.com/">Open Takeout ↗</a></article>
       <article class="source-card featured"><div><p class="eyebrow">SPOTIFY</p>
       <h2>Lifetime listening</h2><p>Request Extended Streaming History once. Its
@@ -175,8 +175,9 @@ def _connection_cards(registry: ProviderRegistry, connections: ConnectionStore) 
                     f'<button class="button" data-bootstrap="{escape(descriptor.id)}">'
                     "Import history</button>"
                 )
-        elif descriptor.id == "github":
-            action = '<a class="button" href="/connections/github/connect">Connect GitHub</a>'
+        elif descriptor.id in {"github", "google", "spotify"}:
+            action = (f'<a class="button" href="/connections/{escape(descriptor.id)}/connect">'
+                      f'Connect {escape(descriptor.display_name)}</a>')
         else:
             action = '<span class="muted">Not configured yet</span>'
         cards.append(
@@ -287,7 +288,9 @@ document.querySelector("#upload")?.addEventListener("click", async (event) => {
       if (stored.import_available) {
         status.textContent = "Importing supported history from " + file.name + "…";
         const result = await importStored(stored.sha256);
-        status.textContent = result.provider + ": " + result.summary.events_written + " event upserts. " + result.coverage;
+        status.textContent = result.status === "stored"
+          ? "Retained; no supported records found. " + result.coverage
+          : result.provider + ": " + result.summary.events_written + " event upserts. " + result.coverage;
       } else {
         status.textContent = file.name + ": retained only; parser not implemented.";
       }

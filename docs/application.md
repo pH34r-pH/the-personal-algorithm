@@ -31,6 +31,17 @@ Key Vault permissions, provider grants, callback routing or tokens currently wor
 The GitHub client secret must be injected through private deployment secret references,
 never committed or copied from another application's connector.
 
+Google/YouTube and Spotify OAuth connections require their own client registrations,
+client IDs, secrets, and registered HTTPS callbacks. Configure `TPA_GOOGLE_CLIENT_ID`,
+`TPA_GOOGLE_CLIENT_SECRET`, `TPA_GOOGLE_REDIRECT_URI`, or the corresponding
+`TPA_SPOTIFY_*` variables and Key Vault. Callback URIs must end in
+`/connections/google/callback` or `/connections/spotify/callback` respectively.
+The connection requests read-only YouTube access or Spotify's recently played scope,
+stores access and refresh tokens in the credential store, and supports explicit token
+refresh. It does not yet acquire provider data, schedule refresh, or sync in the background.
+Provider grants, refresh lifetimes, product eligibility and applicable API policies
+remain provider-dependent; configuration is not proof of live access.
+
 The private report at `/app/onboarding/readiness` lists configured providers, implemented
 parsers and unimplemented capabilities. Live access remains `not_verified`. Optional
 `TPA_SOURCE_REVISION` and platform `CONTAINER_APP_REVISION` values are diagnostic labels,
@@ -44,7 +55,14 @@ not an independently verified attestation of running code. No secret values are 
 | Spotify | Extended Streaming History parsing after archive upload | Other files remain retained, not normalized |
 | Reddit | ZIP or standalone `comments.csv` / `posts.csv` parsing | Posts/comments snapshots only; other tables remain retained |
 | Messages | Structured device JSONL with the `messages` provider hint | Explicitly sent text only; no live phone sync or recipient/attachment import |
-| Google, X, LinkedIn, Meta and other archives | Raw retention | Their semantic parsers and OAuth are not implemented here |
+| Google | My Activity and YouTube history JSON in ZIP archives | Other formats and products are retained without parsing |
+| X, LinkedIn, Meta and other archives | Raw retention | Their semantic parsers and OAuth are not implemented here |
+
+The Google importer reads selected JSON files directly from ZIPs with per-member and
+aggregate decompression limits. It does not parse HTML exports or arbitrary Google
+products. ZIPs with no supported files remain stored, without being marked imported.
+Successful import records snapshots and provenance, not learned ranking preferences;
+as with the Reddit importer, a late invalid row can leave previously committed batches.
 
 The UI uses the same parser registry as the import API. Supported uploads can be parsed
 immediately through the browser's subsequent import request. This is not a durable

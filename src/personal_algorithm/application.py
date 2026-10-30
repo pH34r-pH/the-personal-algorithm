@@ -15,6 +15,7 @@ from .azure_credentials import AzureKeyVaultCredentialStore
 from .bootstrap import BootstrapCoordinator
 from .connections import ConnectionStore
 from .connections_api import create_connections_router
+from .delegated_auth import SPECS, DelegatedAuthorization, DelegatedProvider
 from .github_auth import GitHubAuthorization
 from .github_provider import GitHubProvider
 from .instance_auth import InstanceAuth
@@ -32,6 +33,12 @@ class ApplicationSettings:
     key_vault_url: str = ""
     github_client_id: str = ""
     github_client_secret: str = ""
+    google_client_id: str = ""
+    google_client_secret: str = ""
+    google_redirect_uri: str = ""
+    spotify_client_id: str = ""
+    spotify_client_secret: str = ""
+    spotify_redirect_uri: str = ""
     database_snapshot: str | None = None
     archive_dir: str = "data/archives"
     archive_max_bytes: int = 50 * 1024 * 1024 * 1024
@@ -50,6 +57,12 @@ class ApplicationSettings:
             key_vault_url=os.getenv("TPA_KEY_VAULT_URL", ""),
             github_client_id=os.getenv("TPA_GITHUB_CLIENT_ID", ""),
             github_client_secret=os.getenv("TPA_GITHUB_CLIENT_SECRET", ""),
+            google_client_id=os.getenv("TPA_GOOGLE_CLIENT_ID", ""),
+            google_client_secret=os.getenv("TPA_GOOGLE_CLIENT_SECRET", ""),
+            google_redirect_uri=os.getenv("TPA_GOOGLE_REDIRECT_URI", ""),
+            spotify_client_id=os.getenv("TPA_SPOTIFY_CLIENT_ID", ""),
+            spotify_client_secret=os.getenv("TPA_SPOTIFY_CLIENT_SECRET", ""),
+            spotify_redirect_uri=os.getenv("TPA_SPOTIFY_REDIRECT_URI", ""),
             database_snapshot=os.getenv("TPA_DATABASE_SNAPSHOT"),
             archive_dir=os.getenv("TPA_ARCHIVE_DIR", "data/archives"),
             archive_max_bytes=int(
@@ -93,11 +106,26 @@ def _build_services(settings: ApplicationSettings, credentials, github_http, oau
     github, registry, github_auth = _build_github(
         settings, store, credentials, github_http, oauth_http
     )
-    return store, connection_store, bootstrap, archive_inbox, github, registry, github_auth
+    delegated = {}
+    for provider_id, spec in SPECS.items():
+        client_id = getattr(settings, f"{provider_id}_client_id")
+        client_secret = getattr(settings, f"{provider_id}_client_secret")
+        redirect_uri = getattr(settings, f"{provider_id}_redirect_uri")
+        if not (client_id and client_secret and redirect_uri and (credentials or settings.key_vault_url)):
+            continue
+        credential_store = credentials or AzureKeyVaultCredentialStore(settings.key_vault_url)
+        delegated[provider_id] = DelegatedAuthorization(
+            spec, client_id, client_secret, redirect_uri, credential_store,
+            DurableAuthorizationStateStore(store),
+        )
+        if oauth_http is not None:
+            delegated[provider_id].http = oauth_http
+        registry.register(DelegatedProvider(spec))
+    return store, connection_store, bootstrap, archive_inbox, github, registry, github_auth, delegated
 
 
 def _include_private_routers(app: FastAPI, settings: ApplicationSettings, services) -> None:
-    store, connection_store, bootstrap, archive_inbox, github, registry, github_auth = services
+    store, connection_store, bootstrap, archive_inbox, github, registry, github_auth, delegated = services
     auth = InstanceAuth(owner_object_id=settings.owner_object_id)
     app.include_router(
         protect(
@@ -107,6 +135,7 @@ def _include_private_routers(app: FastAPI, settings: ApplicationSettings, servic
                 bootstrap=bootstrap,
                 github_auth=github_auth,
                 github_provider=github,
+                delegated_auth=delegated,
             ),
             auth,
         )

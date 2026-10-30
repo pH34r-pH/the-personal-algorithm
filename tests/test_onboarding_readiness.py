@@ -66,7 +66,7 @@ def test_readiness_is_private_and_does_not_claim_live_access(tmp_path, monkeypat
     assert value["durable_worker"] == "not_implemented"
     providers = {item["id"]: item for item in value["providers"]}
     assert providers["github"]["oauth"] == "operator_setup_required"
-    assert providers["google"]["archive_parser"] == "not_implemented"
+    assert providers["google"]["archive_parser"] == "implemented"
     assert providers["reddit"]["archive_parser"] == "implemented"
     assert "not-for-diagnostics" not in response.text
 
@@ -113,7 +113,7 @@ def test_failed_parse_retains_archive_and_reports_failure(tmp_path):
 
 def test_unsupported_archive_is_not_presented_as_imported(tmp_path):
     client = TestClient(create_private_app(_settings(tmp_path)))
-    stored = _upload(client, b"{}", "google-export.json", "google")
+    stored = _upload(client, b"{}", "x-export.json", "x")
     assert stored["import_available"] is False
     response = client.post(f'/archives/{stored["sha256"]}/import', headers=OWNER)
     assert response.status_code == 409

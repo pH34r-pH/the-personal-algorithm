@@ -49,9 +49,10 @@ def create_archive_router(inbox: ArchiveInbox) -> APIRouter:
             summary = importer(inbox, inbox.store, record)
         except ValueError as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
+        current = inbox.get(sha256)
         return {
             "provider": provider,
-            "status": "imported",
+            "status": current.status if current else "unknown",
             "coverage": IMPORT_COVERAGE[provider],
             "summary": asdict(summary),
         }

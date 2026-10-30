@@ -108,6 +108,7 @@ def create_connections_router(
     bootstrap: BootstrapCoordinator,
     github_auth: GitHubAuthorization | None = None,
     github_provider: GitHubProvider | None = None,
+    delegated_auth: dict | None = None,
 ) -> APIRouter:
     router = APIRouter(prefix="/connections", tags=["connections"])
 
@@ -116,6 +117,41 @@ def create_connections_router(
         return _provider_listing(registry, connections)
 
     router.include_router(_github_router(github_auth, connections))
+
+    @router.get("/{provider_id}/connect")
+    def delegated_connect(provider_id: str):
+        provider = (delegated_auth or {}).get(provider_id)
+        if provider is None:
+            raise HTTPException(status_code=503, detail="provider authorization is not configured")
+        return RedirectResponse(provider.begin())
+
+    @router.get("/{provider_id}/callback")
+    def delegated_callback(provider_id: str, code: str, state: str):
+        provider = (delegated_auth or {}).get(provider_id)
+        if provider is None:
+            raise HTTPException(status_code=503, detail="provider authorization is not configured")
+        try:
+            connection = provider.complete(code=code, state=state)
+        except Exception as exc:
+            raise HTTPException(status_code=400, detail="provider authorization failed") from exc
+        connections.put(connection)
+        return RedirectResponse("/app/connections", status_code=303)
+
+    @router.post("/{provider_id}/refresh")
+    def refresh_delegated(provider_id: str):
+        provider = (delegated_auth or {}).get(provider_id)
+        if provider is None:
+            raise HTTPException(status_code=503, detail="provider authorization is not configured")
+        try:
+            connection = connections.get(provider_id)
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail="provider is not connected") from exc
+        try:
+            provider.refresh(connection)
+        except Exception as exc:
+            raise HTTPException(status_code=400, detail="provider token refresh failed") from exc
+        return {"provider": provider_id, "status": "refreshed"}
+
     router.include_router(_bootstrap_router(registry, connections, bootstrap))
     return router
 

@@ -116,8 +116,10 @@ def _build_services(settings: ApplicationSettings, credentials, github_http, oau
         credential_store = credentials or AzureKeyVaultCredentialStore(settings.key_vault_url)
         delegated[provider_id] = DelegatedAuthorization(
             spec, client_id, client_secret, redirect_uri, credential_store,
-            DurableAuthorizationStateStore(store), http=oauth_http,
+            DurableAuthorizationStateStore(store),
         )
+        if oauth_http is not None:
+            delegated[provider_id].http = oauth_http
         registry.register(DelegatedProvider(spec))
     return store, connection_store, bootstrap, archive_inbox, github, registry, github_auth, delegated
 

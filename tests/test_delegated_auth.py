@@ -52,7 +52,8 @@ def test_oauth_state_token_storage_and_refresh(provider_id):
 
     auth = DelegatedAuthorization(spec, 'client', 'secret',
                                   f'https://example.test/connections/{provider_id}/callback',
-                                  credentials, states, httpx.Client(transport=httpx.MockTransport(handle)))
+                                  credentials, states)
+    auth.http = httpx.Client(transport=httpx.MockTransport(handle))
     query = parse_qs(urlsplit(auth.begin()).query)
     assert query['code_challenge_method'] == ['S256']
     if provider_id == 'google':

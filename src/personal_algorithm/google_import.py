@@ -63,6 +63,21 @@ def _url(value: object) -> str | None:
         return None
 
 
+def _event(row: object, archive_sha: str, member: str, index: int) -> PersonalEvent:
+    if not isinstance(row, dict) or not isinstance(row.get("title"), str):
+        raise TypeError("invalid activity row")
+    digest = hashlib.sha256(
+        json.dumps(row, sort_keys=True, ensure_ascii=False).encode("utf-8")
+    ).hexdigest()
+    return PersonalEvent(
+        id=f"google:activity:{digest}", source="google", event_type="activity_snapshot",
+        occurred_at=_time(row.get("time")), subject=row["title"],
+        canonical_url=_url(row.get("titleUrl")), payload=dict(row),
+        provenance={"archive_sha256": archive_sha, "member": member,
+                    "index": index, "schema": "google_activity_json_v1"},
+    )
+
+
 def import_google_activity(inbox: ArchiveInbox, store: Store, record: ArchiveRecord):
     if (record.detected_provider or record.provider_hint) != "google":
         raise ValueError("archive is not identified as Google")
@@ -84,21 +99,10 @@ def import_google_activity(inbox: ArchiveInbox, store: Store, record: ArchiveRec
                 scanned += 1
                 batch = []
                 for index, row in enumerate(rows):
-                    if not isinstance(row, dict) or not isinstance(row.get("title"), str):
-                        raise TypeError("invalid activity row")
-                    digest = hashlib.sha256(
-                        json.dumps(row, sort_keys=True, ensure_ascii=False).encode("utf-8")
-                    ).hexdigest()
-                    timestamp = _time(row.get("time"))
+                    event = _event(row, record.sha256, member.filename, index)
                     seen += 1
-                    unknown += timestamp is None
-                    batch.append(PersonalEvent(
-                        id=f"google:activity:{digest}", source="google", event_type="activity_snapshot",
-                        occurred_at=timestamp, subject=row["title"],
-                        canonical_url=_url(row.get("titleUrl")), payload=dict(row),
-                        provenance={"archive_sha256": record.sha256, "member": member.filename,
-                                    "index": index, "schema": "google_activity_json_v1"},
-                    ))
+                    unknown += event.occurred_at is None
+                    batch.append(event)
                     if len(batch) >= 500:
                         written += store.put_personal_events(batch)
                         batch = []

@@ -51,7 +51,7 @@ class DelegatedProvider:
 
 
 class DelegatedAuthorization:
-    def __init__(self, spec, client_id, client_secret, redirect_uri, credentials, states, http=None):
+    def __init__(self, spec, client_id, client_secret, redirect_uri, credentials, states):
         parsed = urlsplit(redirect_uri)
         if (not client_id or not client_secret or parsed.scheme != "https" or not parsed.hostname
                 or parsed.query or parsed.fragment or parsed.username or parsed.password):
@@ -60,7 +60,7 @@ class DelegatedAuthorization:
             raise ValueError("callback must match the provider")
         self.spec, self.client_id, self.client_secret = spec, client_id, client_secret
         self.redirect_uri, self.credentials, self.states = redirect_uri, credentials, states
-        self.http = http or httpx.Client(timeout=20.0)
+        self.http = httpx.Client(timeout=20.0)
 
     def begin(self):
         state = self.states.create(self.redirect_uri)

@@ -43,6 +43,7 @@ not an independently verified attestation of running code. No secret values are 
 | GitHub | Optional OAuth; browser-driven repository metadata import | Not complete issue/PR/commit history or continuous sync |
 | Spotify | Extended Streaming History parsing after archive upload | Other files remain retained, not normalized |
 | Reddit | ZIP or standalone `comments.csv` / `posts.csv` parsing | Posts/comments snapshots only; other tables remain retained |
+| Messages | Structured device JSONL with the `messages` provider hint | Explicitly sent text only; no live phone sync or recipient/attachment import |
 | Google, X, LinkedIn, Meta and other archives | Raw retention | Their semantic parsers and OAuth are not implemented here |
 
 The UI uses the same parser registry as the import API. Supported uploads can be parsed

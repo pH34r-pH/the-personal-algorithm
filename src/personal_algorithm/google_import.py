@@ -170,6 +170,20 @@ def _event(row: object, archive_sha: str, member: str, index: int) -> PersonalEv
     )
 
 
+def _read_rows(stream, filename: str):
+    if filename.lower().endswith(".csv"):
+        reader = csv.DictReader(io.TextIOWrapper(stream, encoding="utf-8-sig", newline=""))
+        if not {"Channel Id", "Channel Url", "Channel Title"} <= set(reader.fieldnames or []):
+            raise ValueError("invalid subscription CSV header")
+        return list(reader)
+    if filename.lower().endswith(".html"):
+        parser = _ActivityHTML()
+        parser.feed(stream.read().decode("utf-8-sig"))
+        parser.close()
+        return parser.rows
+    return json.load(stream)
+
+
 def import_google_activity(inbox: ArchiveInbox, store: Store, record: ArchiveRecord):
     if (record.detected_provider or record.provider_hint) != "google":
         raise ValueError("archive is not identified as Google")
@@ -185,18 +199,7 @@ def import_google_activity(inbox: ArchiveInbox, store: Store, record: ArchiveRec
                 if member.file_size > MAX_MEMBER_BYTES or total > MAX_TOTAL_BYTES:
                     raise ValueError("selected Google activity data exceeds safety limits")
                 with archive.open(member) as stream:
-                    if member.filename.lower().endswith(".csv"):
-                        reader = csv.DictReader(io.TextIOWrapper(stream, encoding="utf-8-sig", newline=""))
-                        if not {"Channel Id", "Channel Url", "Channel Title"} <= set(reader.fieldnames or []):
-                            raise ValueError("invalid subscription CSV header")
-                        rows = list(reader)
-                    elif member.filename.lower().endswith(".html"):
-                        parser = _ActivityHTML()
-                        parser.feed(stream.read().decode("utf-8-sig"))
-                        parser.close()
-                        rows = parser.rows
-                    else:
-                        rows = json.load(stream)
+                    rows = _read_rows(stream, member.filename)
                 if not isinstance(rows, list):
                     raise TypeError("activity JSON must be an array")
                 scanned += 1

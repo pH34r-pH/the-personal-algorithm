@@ -20,6 +20,66 @@ _PLAYLIST = re.compile(r"[A-Za-z0-9_-]{1,128}\Z")
 _API = "https://www.googleapis.com/youtube/v3"
 
 
+def _access_token(connections, auth):
+    if auth is None:
+        raise HTTPException(status_code=503, detail="Google authorization is not configured")
+    try:
+        connection = connections.get("google")
+        if (connection.status != ConnectionStatus.CONNECTED or
+                "https://www.googleapis.com/auth/youtube.readonly" not in connection.granted_scopes):
+            raise ValueError("connection unavailable")
+        secret = json.loads(auth.credentials.get(connection.credential_ref))
+        access = secret["access_token"]
+        expires = datetime.fromisoformat(secret["expires_at"])
+        if not isinstance(access, str) or not access or expires.tzinfo is None:
+            raise ValueError("invalid credential")
+    except (KeyError, TypeError, ValueError) as exc:
+        raise HTTPException(status_code=409, detail="Connect Google before loading videos") from exc
+    if expires <= datetime.now(UTC):
+        raise HTTPException(status_code=409, detail="Refresh the Google connection before loading videos")
+    return access
+
+
+def _video_links(entries):
+    if not isinstance(entries, list) or len(entries) > 10:
+        raise ValueError("invalid playlist response")
+    videos = []
+    for item in entries:
+        video_id = item["contentDetails"]["videoId"]
+        snippet = item["snippet"]
+        title = snippet["title"]
+        if not isinstance(video_id, str) or not _VIDEO.fullmatch(video_id):
+            continue
+        if not isinstance(title, str):
+            continue
+        videos.append({"id": video_id, "title": title,
+                       "published_at": snippet.get("publishedAt"),
+                       "url": f"https://www.youtube.com/watch?v={video_id}",
+                       "embed_url": f"https://www.youtube.com/embed/{video_id}"})
+    return videos
+
+
+def _fetch_videos(client, channel_id, access):
+    headers = {"Authorization": f"Bearer {access}"}
+    try:
+        channel = client.get(f"{_API}/channels", headers=headers,
+                             params={"part": "contentDetails", "id": channel_id})
+        channel.raise_for_status()
+        items = channel.json()["items"]
+        if len(items) != 1 or items[0].get("id") != channel_id:
+            raise ValueError("channel unavailable")
+        playlist = items[0]["contentDetails"]["relatedPlaylists"]["uploads"]
+        if not isinstance(playlist, str) or not _PLAYLIST.fullmatch(playlist):
+            raise ValueError("invalid playlist")
+        feed = client.get(f"{_API}/playlistItems", headers=headers,
+                          params={"part": "snippet,contentDetails", "playlistId": playlist,
+                                  "maxResults": 10})
+        feed.raise_for_status()
+        return _video_links(feed.json()["items"])
+    except (httpx.HTTPError, KeyError, TypeError, ValueError, IndexError) as exc:
+        raise HTTPException(status_code=502, detail="YouTube discovery failed") from exc
+
+
 def create_youtube_router(store: Store, connections: ConnectionStore, auth, *, http=None):
     router = APIRouter(prefix="/youtube", tags=["youtube"])
     client = http or httpx.Client(timeout=20.0, follow_redirects=False)
@@ -56,55 +116,7 @@ def create_youtube_router(store: Store, connections: ConnectionStore, auth, *, h
         ).fetchone()
         if row is None:
             raise HTTPException(status_code=404, detail="Channel is not an imported subscription")
-        if auth is None:
-            raise HTTPException(status_code=503, detail="Google authorization is not configured")
-        try:
-            connection = connections.get("google")
-            if (connection.status != ConnectionStatus.CONNECTED or
-                    "https://www.googleapis.com/auth/youtube.readonly" not in connection.granted_scopes):
-                raise ValueError("connection unavailable")
-            secret = json.loads(auth.credentials.get(connection.credential_ref))
-            access = secret["access_token"]
-            expires = datetime.fromisoformat(secret["expires_at"])
-            if not isinstance(access, str) or not access or expires.tzinfo is None:
-                raise ValueError("invalid credential")
-        except (KeyError, TypeError, ValueError) as exc:
-            raise HTTPException(status_code=409, detail="Connect Google before loading videos") from exc
-        if expires <= datetime.now(UTC):
-            raise HTTPException(status_code=409, detail="Refresh the Google connection before loading videos")
-        headers = {"Authorization": f"Bearer {access}"}
-        try:
-            channel = client.get(f"{_API}/channels", headers=headers,
-                                 params={"part": "contentDetails", "id": channel_id})
-            channel.raise_for_status()
-            items = channel.json()["items"]
-            if len(items) != 1 or items[0].get("id") != channel_id:
-                raise ValueError("channel unavailable")
-            playlist = items[0]["contentDetails"]["relatedPlaylists"]["uploads"]
-            if not isinstance(playlist, str) or not _PLAYLIST.fullmatch(playlist):
-                raise ValueError("invalid playlist")
-            feed_response = client.get(f"{_API}/playlistItems", headers=headers,
-                                       params={"part": "snippet,contentDetails", "playlistId": playlist,
-                                               "maxResults": 10})
-            feed_response.raise_for_status()
-            entries = feed_response.json()["items"]
-            if not isinstance(entries, list) or len(entries) > 10:
-                raise ValueError("invalid playlist response")
-            videos = []
-            for item in entries:
-                video_id = item["contentDetails"]["videoId"]
-                snippet = item["snippet"]
-                title = snippet["title"]
-                if not isinstance(video_id, str) or not _VIDEO.fullmatch(video_id):
-                    continue
-                if not isinstance(title, str):
-                    continue
-                videos.append({"id": video_id, "title": title,
-                               "published_at": snippet.get("publishedAt"),
-                               "url": f"https://www.youtube.com/watch?v={video_id}",
-                               "embed_url": f"https://www.youtube.com/embed/{video_id}"})
-        except (httpx.HTTPError, KeyError, TypeError, ValueError, IndexError) as exc:
-            raise HTTPException(status_code=502, detail="YouTube discovery failed") from exc
+        videos = _fetch_videos(client, channel_id, _access_token(connections, auth))
         return {"source": "YouTube", "channel_id": channel_id, "videos": videos}
 
     return router

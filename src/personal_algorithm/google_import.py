@@ -184,6 +184,19 @@ def _read_rows(stream, filename: str):
     return json.load(stream)
 
 
+def _selected_rows(archive, member, total):
+    if stat.S_ISLNK(member.external_attr >> 16) or member.flag_bits & 1:
+        raise ValueError("linked or encrypted member")
+    total += member.file_size
+    if member.file_size > MAX_MEMBER_BYTES or total > MAX_TOTAL_BYTES:
+        raise ValueError("selected Google activity data exceeds safety limits")
+    with archive.open(member) as stream:
+        rows = _read_rows(stream, member.filename)
+    if not isinstance(rows, list):
+        raise TypeError("activity JSON must be an array")
+    return rows, total
+
+
 def import_google_activity(inbox: ArchiveInbox, store: Store, record: ArchiveRecord):
     if (record.detected_provider or record.provider_hint) != "google":
         raise ValueError("archive is not identified as Google")
@@ -193,15 +206,7 @@ def import_google_activity(inbox: ArchiveInbox, store: Store, record: ArchiveRec
             for member in archive.infolist():
                 if member.is_dir() or not _supported(member.filename):
                     continue
-                if stat.S_ISLNK(member.external_attr >> 16) or member.flag_bits & 1:
-                    raise ValueError("linked or encrypted member")
-                total += member.file_size
-                if member.file_size > MAX_MEMBER_BYTES or total > MAX_TOTAL_BYTES:
-                    raise ValueError("selected Google activity data exceeds safety limits")
-                with archive.open(member) as stream:
-                    rows = _read_rows(stream, member.filename)
-                if not isinstance(rows, list):
-                    raise TypeError("activity JSON must be an array")
+                rows, total = _selected_rows(archive, member, total)
                 scanned += 1
                 batch = []
                 for index, row in enumerate(rows):

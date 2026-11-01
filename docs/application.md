@@ -55,14 +55,35 @@ not an independently verified attestation of running code. No secret values are 
 | Spotify | Extended Streaming History parsing after archive upload | Other files remain retained, not normalized |
 | Reddit | ZIP or standalone `comments.csv` / `posts.csv` parsing | Posts/comments snapshots only; other tables remain retained |
 | Messages | Structured device JSONL with the `messages` provider hint | Explicitly sent text only; no live phone sync or recipient/attachment import |
-| Google | My Activity and YouTube history JSON in ZIP archives | Other formats and products are retained without parsing |
+| Google | My Activity and YouTube history JSON/HTML, and YouTube subscriptions CSV in ZIP archives | Other formats and products are retained without parsing |
 | X, LinkedIn, Meta and other archives | Raw retention | Their semantic parsers and OAuth are not implemented here |
 
-The Google importer reads selected JSON files directly from ZIPs with per-member and
-aggregate decompression limits. It does not parse HTML exports or arbitrary Google
-products. ZIPs with no supported files remain stored, without being marked imported.
+The Google importer reads selected JSON, HTML, and subscriptions CSV files directly from
+ZIPs with per-member and aggregate decompression limits. HTML timestamps with unrecognized
+time zones remain unknown. It does not parse arbitrary Google products or media. ZIPs with
+no supported files remain stored, without being marked imported.
+The upload still retains the entire original ZIP, including unparsed media and other
+personal data; selecting parser inputs does not filter the retained archive.
 Successful import records snapshots and provenance, not learned ranking preferences;
 as with the Reddit importer, a late invalid row can leave previously committed batches.
+The `events_written` count includes upserts; matching activity in multiple files is
+deduplicated in storage, so it is not a count of distinct new events.
+
+## YouTube discovery
+
+The owner-only `/youtube/` page lists imported subscription references. After Google
+OAuth is configured and connected, choosing a channel fetches up to ten recent uploads
+on demand through the YouTube Data API. Video links and optional embedded playback point
+to YouTube. Results are transient: they are not stored as candidates or scored, and no
+automatic syncing or external account interactions occur. A token that has expired must
+be refreshed through the existing connection endpoint before use. The player may not
+support every video, in which case the canonical YouTube link remains available.
+
+The runtime needs the Google client ID, client secret, fixed callback and credential
+store configured; a signed-in browser session does not grant the server access. The
+owner must grant the existing YouTube read-only scope via the connection flow. Review
+YouTube's [developer policies](https://developers.google.com/youtube/terms/developer-policies)
+before expanding this prototype to persistent or ranked API-derived data.
 
 The UI uses the same parser registry as the import API. Supported uploads can be parsed
 immediately through the browser's subsequent import request. This is not a durable

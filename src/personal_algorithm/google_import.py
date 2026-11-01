@@ -1,16 +1,20 @@
-"""Import bounded Google Takeout activity JSON without extracting archives."""
+"""Import selected Google Takeout history and subscription references."""
 
 from __future__ import annotations
 
+import csv
 import hashlib
+import io
 import json
+import re
 import stat
 import zipfile
 from dataclasses import asdict, dataclass
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
+from html.parser import HTMLParser
 from pathlib import PurePosixPath
 from typing import TYPE_CHECKING
-from urllib.parse import urlsplit
+from urllib.parse import urlsplit, urlunsplit
 
 from .models import PersonalEvent
 
@@ -29,7 +33,7 @@ class GoogleImportSummary:
     rows_seen: int
     events_written: int
     unknown_timestamps: int
-    scope: str = "my_activity_and_youtube_history_json_only"
+    scope: str = "google_activity_json_html_and_youtube_subscriptions_csv"
 
 
 def _supported(name: str) -> bool:
@@ -37,10 +41,95 @@ def _supported(name: str) -> bool:
     if not parts or '..' in parts or PurePosixPath(name.replace("\\", "/")).is_absolute():
         raise ValueError("unsafe archive member path")
     lower = [p.lower() for p in parts]
-    if "my activity" in lower and lower[-1] == "myactivity.json":
+    if "my activity" in lower and lower[-1] in {"myactivity.json", "myactivity.html"}:
         return True
-    return ("youtube and youtube music" in lower and "history" in lower
-            and lower[-1] in {"watch-history.json", "search-history.json"})
+    if "youtube and youtube music" not in lower:
+        return False
+    return (("history" in lower and lower[-1] in {
+        "watch-history.json", "search-history.json", "watch-history.html", "search-history.html"
+    }) or ("subscriptions" in lower and lower[-1] == "subscriptions.csv"))
+
+
+_OFFSETS = {"UTC": 0, "GMT": 0, "PST": -8, "PDT": -7, "MST": -7, "MDT": -6,
+            "CST": -6, "CDT": -5, "EST": -5, "EDT": -4}
+
+
+def _html_time(value: str) -> datetime | None:
+    value = " ".join(value.split())
+    date_text, _, zone = value.rpartition(" ")
+    if zone not in _OFFSETS:
+        return None
+    try:
+        return datetime.strptime(date_text, "%b %d, %Y, %I:%M:%S %p").replace(
+            tzinfo=timezone(timedelta(hours=_OFFSETS[zone]))
+        )
+    except ValueError:
+        return None
+
+
+class _ActivityHTML(HTMLParser):
+    """Collect the first six-column content cell of each Takeout activity card."""
+
+    def __init__(self):
+        super().__init__(convert_charrefs=True)
+        self.rows: list[dict] = []
+        self.depth = 0
+        self.lines: list[str] = []
+        self.url: str | None = None
+
+    def handle_starttag(self, tag, attrs):
+        attrs = dict(attrs)
+        classes = set(attrs.get("class", "").split())
+        if not self.depth and tag == "div" and {"content-cell", "mdl-cell--6-col"} <= classes:
+            if "mdl-typography--text-right" not in classes:
+                self.depth = 1
+                self.lines = [""]
+                self.url = None
+        elif self.depth:
+            if tag == "div":
+                self.depth += 1
+            elif tag == "br":
+                self.lines.append("")
+            elif tag == "a" and self.url is None:
+                self.url = _url(attrs.get("href"))
+
+    def handle_startendtag(self, tag, attrs):
+        self.handle_starttag(tag, attrs)
+
+    def handle_data(self, data):
+        if self.depth:
+            self.lines[-1] += data
+
+    def handle_endtag(self, tag):
+        if self.depth and tag == "div":
+            self.depth -= 1
+            if not self.depth:
+                lines = [" ".join(line.split()) for line in self.lines if line.strip()]
+                if lines:
+                    timestamp = _html_time(lines[-1])
+                    self.rows.append({"title": lines[0], "titleUrl": self.url,
+                                      "time": timestamp.isoformat() if timestamp else None})
+
+
+def _subscription(row: dict, archive_sha: str, member: str, index: int) -> PersonalEvent:
+    channel_id = (row.get("Channel Id") or "").strip()
+    title = (row.get("Channel Title") or "").strip()
+    url = _url(row.get("Channel Url"))
+    if not re.fullmatch(r"[A-Za-z0-9_-]{1,128}", channel_id) or not title or not url:
+        raise ValueError("invalid YouTube subscription")
+    parsed = urlsplit(url)
+    if (parsed.hostname not in {"www.youtube.com", "youtube.com"}
+            or parsed.path.rstrip("/") != f"/channel/{channel_id}"
+            or parsed.query or parsed.fragment or parsed.username or parsed.password
+            or parsed.port is not None):
+        raise ValueError("invalid YouTube channel URL")
+    url = urlunsplit(("https", parsed.hostname, parsed.path, "", ""))
+    return PersonalEvent(
+        id=f"youtube:subscription:{channel_id}", source="youtube", event_type="subscription",
+        subject=title, canonical_url=url, payload={"channel_id": channel_id},
+        provenance={"archive_sha256": archive_sha, "member": member, "index": index,
+                    "schema": "youtube_subscriptions_csv_v1"},
+    )
 
 
 def _time(value: object) -> datetime | None:
@@ -74,8 +163,38 @@ def _event(row: object, archive_sha: str, member: str, index: int) -> PersonalEv
         occurred_at=_time(row.get("time")), subject=row["title"],
         canonical_url=_url(row.get("titleUrl")), payload=dict(row),
         provenance={"archive_sha256": archive_sha, "member": member,
-                    "index": index, "schema": "google_activity_json_v1"},
+                    "index": index, "schema": (
+                        "google_activity_html_v1" if member.lower().endswith(".html")
+                        else "google_activity_json_v1"
+                    )},
     )
+
+
+def _read_rows(stream, filename: str):
+    if filename.lower().endswith(".csv"):
+        reader = csv.DictReader(io.TextIOWrapper(stream, encoding="utf-8-sig", newline=""))
+        if not {"Channel Id", "Channel Url", "Channel Title"} <= set(reader.fieldnames or []):
+            raise ValueError("invalid subscription CSV header")
+        return list(reader)
+    if filename.lower().endswith(".html"):
+        parser = _ActivityHTML()
+        parser.feed(stream.read().decode("utf-8-sig"))
+        parser.close()
+        return parser.rows
+    return json.load(stream)
+
+
+def _selected_rows(archive, member, total):
+    if stat.S_ISLNK(member.external_attr >> 16) or member.flag_bits & 1:
+        raise ValueError("linked or encrypted member")
+    total += member.file_size
+    if member.file_size > MAX_MEMBER_BYTES or total > MAX_TOTAL_BYTES:
+        raise ValueError("selected Google activity data exceeds safety limits")
+    with archive.open(member) as stream:
+        rows = _read_rows(stream, member.filename)
+    if not isinstance(rows, list):
+        raise TypeError("activity JSON must be an array")
+    return rows, total
 
 
 def import_google_activity(inbox: ArchiveInbox, store: Store, record: ArchiveRecord):
@@ -87,21 +206,16 @@ def import_google_activity(inbox: ArchiveInbox, store: Store, record: ArchiveRec
             for member in archive.infolist():
                 if member.is_dir() or not _supported(member.filename):
                     continue
-                if stat.S_ISLNK(member.external_attr >> 16) or member.flag_bits & 1:
-                    raise ValueError("linked or encrypted member")
-                total += member.file_size
-                if member.file_size > MAX_MEMBER_BYTES or total > MAX_TOTAL_BYTES:
-                    raise ValueError("selected Google activity data exceeds safety limits")
-                with archive.open(member) as stream:
-                    rows = json.load(stream)
-                if not isinstance(rows, list):
-                    raise TypeError("activity JSON must be an array")
+                rows, total = _selected_rows(archive, member, total)
                 scanned += 1
                 batch = []
                 for index, row in enumerate(rows):
-                    event = _event(row, record.sha256, member.filename, index)
+                    if member.filename.lower().endswith(".csv"):
+                        event = _subscription(row, record.sha256, member.filename, index)
+                    else:
+                        event = _event(row, record.sha256, member.filename, index)
                     seen += 1
-                    unknown += event.occurred_at is None
+                    unknown += event.event_type != "subscription" and event.occurred_at is None
                     batch.append(event)
                     if len(batch) >= 500:
                         written += store.put_personal_events(batch)

@@ -13,7 +13,7 @@ ARCHIVE_IMPORTERS = {
 }
 
 IMPORT_COVERAGE = {
-    "google": "My Activity and YouTube history JSON only; other files remain retained",
+    "google": "My Activity and YouTube history JSON/HTML and YouTube subscriptions CSV; other files remain retained",
     "spotify": "Extended Streaming History only; other files remain retained",
     "reddit": "Posts and comments CSVs only; other files remain retained",
     "messages": "Explicitly sent messages in structured JSONL only",

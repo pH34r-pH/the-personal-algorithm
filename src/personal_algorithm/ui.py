@@ -77,7 +77,8 @@ def _home_router(archives, personal_event_count) -> APIRouter:
         <div class="stats"><div><strong>{archive_count}</strong><span>archives retained</span></div>
         <div><strong>{event_count}</strong><span>normalized events</span></div></div>
         <div class="hero-actions"><a class="button primary" href="/app/onboarding">Start / continue onboarding</a>
-        <a class="button" href="/app/connections">Connections</a></div></main>"""
+        <a class="button" href="/app/connections">Connections</a>
+        <a class="button" href="/youtube/">YouTube discovery</a></div></main>"""
         return _page("The Personal Algorithm", body)
 
     return router
@@ -114,7 +115,8 @@ def _onboarding_body(registry: ProviderRegistry, connections: ConnectionStore, a
     <section>
       <article class="source-card featured"><div><p class="eyebrow">GOOGLE</p>
       <h2>Google Takeout</h2><p>Preserve YouTube, My Activity, Search, Chrome and other
-      selected products. My Activity and YouTube history JSON can be imported;
+      selected products. My Activity and YouTube history JSON or HTML, and YouTube
+      subscriptions CSV, can be imported;
       other formats and products are retained without parsing.</p></div>
       <a class="button primary" target="_blank" rel="noopener" href="https://takeout.google.com/">Open Takeout ↗</a></article>
       <article class="source-card featured"><div><p class="eyebrow">SPOTIFY</p>

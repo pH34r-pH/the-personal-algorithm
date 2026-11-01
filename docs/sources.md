@@ -19,3 +19,7 @@ The adapter:
 The adapter does not mirror linked page contents. It ranks feed metadata and points consumption back to the canonical source.
 
 Future source adapters should preserve this boundary wherever practical.
+
+For proposed platform discovery, owner-controlled ranking, and observational experiments,
+see [Platform discovery and user-owned ranking](platform-discovery-strategy.md). That
+document describes research and proposed work, not currently deployed functionality.

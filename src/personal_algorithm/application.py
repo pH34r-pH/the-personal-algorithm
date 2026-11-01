@@ -24,6 +24,7 @@ from .private_api import protect
 from .provider_registry import ProviderRegistry
 from .store import Store
 from .ui import create_ui_router
+from .youtube_discovery import create_youtube_router
 
 
 @dataclass(frozen=True, slots=True)
@@ -124,7 +125,7 @@ def _build_services(settings: ApplicationSettings, credentials, github_http, oau
     return store, connection_store, bootstrap, archive_inbox, github, registry, github_auth, delegated
 
 
-def _include_private_routers(app: FastAPI, settings: ApplicationSettings, services) -> None:
+def _include_private_routers(app: FastAPI, settings: ApplicationSettings, services, youtube_http=None) -> None:
     store, connection_store, bootstrap, archive_inbox, github, registry, github_auth, delegated = services
     auth = InstanceAuth(owner_object_id=settings.owner_object_id)
     app.include_router(
@@ -141,6 +142,9 @@ def _include_private_routers(app: FastAPI, settings: ApplicationSettings, servic
         )
     )
     app.include_router(protect(create_archive_router(archive_inbox), auth))
+    app.include_router(protect(create_youtube_router(
+        store, connection_store, delegated.get("google"), http=youtube_http,
+    ), auth))
     app.include_router(
         protect(
             create_ui_router(
@@ -202,10 +206,11 @@ def create_private_app(
     credentials=None,
     github_http=None,
     oauth_http=None,
+    youtube_http=None,
 ) -> FastAPI:
     services = _build_services(settings, credentials, github_http, oauth_http)
     app = FastAPI(title="The Personal Algorithm", version="0.1.0")
-    _include_private_routers(app, settings, services)
+    _include_private_routers(app, settings, services, youtube_http)
 
     @app.get("/", response_class=HTMLResponse)
     def landing() -> str:

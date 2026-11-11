@@ -1,0 +1,78 @@
+{
+  "schema_version": 1,
+  "profile_id": "https://ph34r.dev/ns/long-haul/repository-alignment/v1",
+  "repository": "pH34r-pH/the-personal-algorithm",
+  "repository_profile": "product-data",
+  "status": "pre-alpha",
+  "authority": {
+    "source_of_truth": "Reviewed policy source, source-adapter contracts, immutable interaction receipts, and operator-approved private state.",
+    "task_authority": "GitHub issues and versioned ranking-policy specifications with observable explanation and privacy criteria.",
+    "acceptance_authority": "Deterministic offline replay, counterfactual policy evaluation, source trust checks, and explicit operator review.",
+    "deployment_authority": "Private operator-controlled runtime; public source and learned candidates have no automatic access to personal accounts or state."
+  },
+  "data": {
+    "default_class": "personal",
+    "external_content_is_untrusted": true,
+    "contains_personal_data": true,
+    "contains_secrets": false,
+    "retention": "Private candidates, interactions, source receipts, preferences, and policy outcomes follow explicit operator retention and purpose rules.",
+    "deletion": "Operator deletion removes private records and derived indexes; policy candidates trained from removed material require impact review or retirement.",
+    "secret_storage": "OAuth tokens, account credentials, and private runtime state remain outside Git in operator-controlled storage."
+  },
+  "resource_policy": {
+    "conforms_to": "https://ph34r.dev/ns/long-haul/resource-policy/v1",
+    "actions": {
+      "read": "review",
+      "index": "review",
+      "search": "review",
+      "ai_augment": "review",
+      "evaluate": "allow",
+      "data_mining": "deny",
+      "ai_training": "review",
+      "generative_ai_training": "deny",
+      "derive": "review",
+      "annotate": "review",
+      "distribute": "deny",
+      "publish": "deny",
+      "retain": "review",
+      "delete": "review"
+    }
+  },
+  "change_control": {
+    "independent_acceptance": true,
+    "candidate_before_promotion": true,
+    "production_promotion": "manual",
+    "rollback_or_revocation": "Ranking policies, adapters, grants, and learned candidates remain versioned, independently reversible, and operator revocable.",
+    "negative_results_retained": true
+  },
+  "evidence": {
+    "exact_source_identity": true,
+    "artifact_fingerprints": true,
+    "provenance_receipts": true
+  },
+  "boundaries": {
+    "external_text_cannot_grant_authority": true,
+    "model_output_cannot_self_approve": true,
+    "deployment_separate_from_acceptance": true
+  },
+  "stabilization": [
+    {
+      "id": "source-trust-manifest",
+      "priority": "P0",
+      "status": "planned",
+      "summary": "Attach exact source, trust, purpose, permitted-use, freshness, and prompt-injection classification to every candidate input."
+    },
+    {
+      "id": "offline-counterfactual-replay",
+      "priority": "P0",
+      "status": "active",
+      "summary": "Evaluate policy changes against frozen interactions, counterfactual alternatives, explanation quality, and privacy leakage before promotion."
+    },
+    {
+      "id": "immutable-learned-policy-candidates",
+      "priority": "P1",
+      "status": "planned",
+      "summary": "Treat learned ranking revisions as immutable candidates requiring independent evaluation and explicit operator promotion."
+    }
+  ]
+}

@@ -29,6 +29,8 @@ jobs:
         run: docker build --tag personal-algorithm:ci .
       - name: Smoke the packaged imports as the image's non-root user
         run: |
+          docker image inspect personal-algorithm:ci --format '{{json .Config.Cmd}}' | \
+            python -c 'import json, sys; cmd = json.load(sys.stdin); assert cmd[:2] == ["uvicorn", "personal_algorithm.application:app_from_env"]; assert "--factory" in cmd and "--no-access-log" in cmd'
           timeout 30s docker run --rm --network none --read-only \
             --cap-drop ALL --security-opt no-new-privileges \
             --env PYTHONDONTWRITEBYTECODE=1 \

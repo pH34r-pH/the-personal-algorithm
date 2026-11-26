@@ -1,10 +1,12 @@
 """Hermetic tests for the non-production local SQLite reservation prototype."""
 import sqlite3
+import threading
 from contextlib import closing
 
 import pytest
 
 from personal_algorithm.locked_snapshot import LockSnapshotError, locked_snapshot
+from personal_algorithm.store import Store
 
 
 def source_db(path):
@@ -59,3 +61,45 @@ def test_invalid_timeout_is_rejected_before_open(tmp_path, timeout):
         tmp_path / "missing", staging_dir=tmp_path, timeout=timeout
     ):
         pass
+
+
+def test_captures_store_commit_paused_before_file_snapshot(tmp_path, monkeypatch):
+    live, snapshot = tmp_path / "live.sqlite3", tmp_path / "snapshot.sqlite3"
+    store = Store(live, snapshot_path=snapshot)
+    store.connection.execute("CREATE TABLE probe (value INTEGER)")
+    store.connection.execute("INSERT INTO probe VALUES (1)")
+    store.connection.commit()
+    entered, resume = threading.Event(), threading.Event()
+    original = store.connection._write_snapshot
+
+    def paused_snapshot():
+        entered.set()
+        if not resume.wait(5):
+            raise TimeoutError("test did not release paused snapshot")
+        original()
+
+    monkeypatch.setattr(store.connection, "_write_snapshot", paused_snapshot)
+    errors = []
+
+    def commit_second():
+        try:
+            store.connection.execute("INSERT INTO probe VALUES (2)")
+            store.connection.commit()
+        except Exception as exc:  # noqa: BLE001 - propagate background failure to the test
+            errors.append(exc)
+
+    worker = threading.Thread(target=commit_second)
+    worker.start()
+    try:
+        assert entered.wait(5)
+        with locked_snapshot(live, staging_dir=tmp_path, timeout=1) as locked:
+            with closing(sqlite3.connect(snapshot)) as old, closing(sqlite3.connect(locked.path)) as copy:
+                assert old.execute("SELECT count(*) FROM probe").fetchone()[0] == 1
+                assert copy.execute("SELECT count(*) FROM probe").fetchone()[0] == 2
+            locked.verify()
+    finally:
+        resume.set()
+        worker.join(10)
+        store.connection.close()
+    assert not worker.is_alive()
+    assert not errors

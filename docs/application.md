@@ -16,6 +16,14 @@ The public landing page and health endpoint remain separate from owner-only rout
 `TPA_ARCHIVE_MAX_BYTES` defaults to 50 GiB per upload. Production should mount raw
 archive storage separately from the live SQLite snapshot.
 
+When `TPA_DATABASE_SNAPSHOT` is configured, commits copy a local SQLite backup
+to a uniquely named temporary file next to the snapshot, then replace the
+snapshot. Each operation removes only its own temporary file. This avoids a
+shared staging filename but does not fence concurrent revisions or close the
+window between a local commit and snapshot publication. A failed snapshot can
+leave the local database newer than the persistent copy; do not infer safe
+scale-to-zero or recovery solely from this staging behavior.
+
 GitHub additionally requires all of:
 
 ```text

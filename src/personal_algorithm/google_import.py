@@ -16,6 +16,7 @@ from pathlib import PurePosixPath
 from typing import TYPE_CHECKING
 from urllib.parse import urlsplit, urlunsplit
 
+from .json_array_stream import iter_json_array
 from .models import PersonalEvent
 
 if TYPE_CHECKING:
@@ -190,6 +191,18 @@ def _selected_rows(archive, member, total):
     total += member.file_size
     if member.file_size > MAX_MEMBER_BYTES or total > MAX_TOTAL_BYTES:
         raise ValueError("selected Google activity data exceeds safety limits")
+    if member.filename.lower().endswith(".json"):
+        # Validate the whole member before writing any of its rows. Reopening
+        # the archive member preserves that contract without retaining all rows.
+        with archive.open(member) as stream:
+            for _ in iter_json_array(stream):
+                pass
+
+        def validated_rows():
+            with archive.open(member) as stream:
+                yield from iter_json_array(stream)
+
+        return validated_rows(), total
     with archive.open(member) as stream:
         rows = _read_rows(stream, member.filename)
     if not isinstance(rows, list):

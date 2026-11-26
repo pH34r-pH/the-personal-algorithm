@@ -131,3 +131,33 @@ def test_same_activity_in_two_history_files_is_deduplicated(tmp_path):
     assert response.status_code == 200
     assert response.json()['summary']['rows_seen'] == 2
     assert store.count_personal_events() == 1
+
+
+def test_malformed_json_after_multiple_batches_does_not_partially_import_member(tmp_path):
+    store = Store()
+    app = FastAPI()
+    app.include_router(create_archive_router(ArchiveInbox(store, tmp_path)))
+    client = TestClient(app)
+    valid_rows = ','.join(json.dumps({"title": f"sample {index}"}) for index in range(1100))
+    archive = _zip({'Takeout/My Activity/YouTube/MyActivity.json': '[' + valid_rows + ',invalid]'})
+    uploaded = client.post('/archives/upload', content=archive,
+                           headers={'x-archive-filename': 'takeout.zip',
+                                    'x-provider-hint': 'google'}).json()
+    response = client.post(f'/archives/{uploaded["sha256"]}/import')
+    assert response.status_code == 422
+    assert store.count_personal_events() == 0
+
+
+def test_invalid_row_retains_previously_committed_batches(tmp_path):
+    store = Store()
+    app = FastAPI()
+    app.include_router(create_archive_router(ArchiveInbox(store, tmp_path)))
+    client = TestClient(app)
+    rows = [{"title": f"sample {index}"} for index in range(510)] + [{"missing": "title"}]
+    archive = _zip({'Takeout/My Activity/YouTube/MyActivity.json': json.dumps(rows)})
+    uploaded = client.post('/archives/upload', content=archive,
+                           headers={'x-archive-filename': 'takeout.zip',
+                                    'x-provider-hint': 'google'}).json()
+    response = client.post(f'/archives/{uploaded["sha256"]}/import')
+    assert response.status_code == 422
+    assert store.count_personal_events() == 500

@@ -15,6 +15,7 @@ from typing import Any
 
 from .leased_snapshot import LeasedSnapshot, SnapshotUnavailable
 from .models import Candidate, Interaction, PersonalEvent, RankedCandidate
+from .snapshot_validation import validate_snapshot
 
 SCHEMA = """
 PRAGMA foreign_keys = ON;
@@ -98,17 +99,7 @@ def _restore_leased_snapshot(database: Path, snapshot: LeasedSnapshot) -> None:
     try:
         with os.fdopen(fd, "wb") as output:
             snapshot.download(output)
-        check = sqlite3.connect(f"{staged.resolve().as_uri()}?mode=ro", uri=True)
-        try:
-            if check.execute("PRAGMA quick_check").fetchall() != [("ok",)]:
-                raise SnapshotUnavailable("snapshot integrity check failed")
-            tables = {row[0] for row in check.execute(
-                "SELECT name FROM sqlite_master WHERE type = 'table'"
-            )}
-            if not {"candidates", "personal_events", "rankings", "interactions"} <= tables:
-                raise SnapshotUnavailable("snapshot is missing required tables")
-        finally:
-            check.close()
+        validate_snapshot(staged)
         snapshot.verify()
         # Hard-link creation fails if another file appeared at the target.
         os.link(staged, database)

@@ -8,6 +8,7 @@ import os
 import shutil
 import sqlite3
 import tempfile
+import threading
 import time
 from contextlib import closing
 from pathlib import Path
@@ -85,6 +86,8 @@ def _logical_database_digest(path: Path) -> bytes:
     digest = hashlib.sha256()
     uri = path.resolve().as_uri() + "?mode=ro"
     with closing(sqlite3.connect(uri, uri=True, timeout=30.0)) as connection:
+        if connection.execute("PRAGMA quick_check").fetchone() != ("ok",):
+            raise sqlite3.DatabaseError("database failed SQLite quick_check")
         for line in connection.iterdump():
             digest.update(line.encode("utf-8"))
             digest.update(b"\n")
@@ -99,24 +102,55 @@ def _restore_snapshot(database: Path, snapshot: Path | None) -> None:
             raise RuntimeError("local database and persistent snapshot differ; recovery required")
         return
     database.parent.mkdir(parents=True, exist_ok=True)
-    shutil.copyfile(snapshot, database)
+    descriptor, filename = tempfile.mkstemp(
+        prefix=f".{database.name}.", suffix=".restore", dir=database.parent,
+    )
+    staged = Path(filename)
+    try:
+        with os.fdopen(descriptor, "wb") as destination, snapshot.open("rb") as source:
+            shutil.copyfileobj(source, destination)
+            destination.flush()
+            os.fsync(destination.fileno())
+        snapshot_digest = _logical_database_digest(staged)
+        try:
+            os.link(staged, database)
+        except FileExistsError:
+            if _logical_database_digest(database) != snapshot_digest:
+                raise RuntimeError("local database and persistent snapshot differ; recovery required") from None
+    finally:
+        staged.unlink(missing_ok=True)
 
 
 class _DurableConnection:
     def __init__(self, connection: sqlite3.Connection, snapshot: Path | None) -> None:
         self._connection = connection
         self._snapshot = snapshot
+        self._lock = threading.RLock()
 
     def __getattr__(self, name: str) -> Any:
         return getattr(self._connection, name)
 
+    def execute(self, *args, **kwargs):
+        with self._lock:
+            return self._connection.execute(*args, **kwargs)
+
+    def executemany(self, *args, **kwargs):
+        with self._lock:
+            return self._connection.executemany(*args, **kwargs)
+
+    def executescript(self, *args, **kwargs):
+        with self._lock:
+            return self._connection.executescript(*args, **kwargs)
+
     def commit(self) -> None:
-        self._connection.commit()
-        if self._snapshot is not None:
-            self._write_snapshot()
+        with self._lock:
+            self._connection.commit()
+            if self._snapshot is not None:
+                self._write_snapshot()
 
     def rollback(self) -> None:
-        self._connection.rollback()
+        with self._lock:
+            self._connection.rollback()
 
     def _write_snapshot(self) -> None:
         snapshot = self._snapshot
@@ -126,7 +160,7 @@ class _DurableConnection:
         fd, local_name = tempfile.mkstemp(prefix="personal-algorithm-", suffix=".sqlite3")
         os.close(fd)
         local_copy = Path(local_name)
-        remote_tmp = snapshot.with_suffix(snapshot.suffix + ".tmp")
+        remote_tmp = None
         try:
             backup = sqlite3.connect(str(local_copy))
             try:
@@ -134,11 +168,19 @@ class _DurableConnection:
                 backup.commit()
             finally:
                 backup.close()
-            shutil.copyfile(local_copy, remote_tmp)
+            remote_fd, remote_name = tempfile.mkstemp(
+                prefix=f".{snapshot.name}.", suffix=".tmp", dir=snapshot.parent
+            )
+            remote_tmp = Path(remote_name)
+            with os.fdopen(remote_fd, "wb") as destination, local_copy.open("rb") as source:
+                shutil.copyfileobj(source, destination)
             os.replace(remote_tmp, snapshot)
         finally:
-            local_copy.unlink(missing_ok=True)
-            remote_tmp.unlink(missing_ok=True)
+            try:
+                local_copy.unlink(missing_ok=True)
+            finally:
+                if remote_tmp is not None:
+                    remote_tmp.unlink(missing_ok=True)
 
 
 class Store:
@@ -224,6 +266,46 @@ class Store:
         )
         self.connection.commit()
         return len(rows)
+
+    def merge_staged_personal_events(self, path: Path, count: int) -> int:
+        """Commit one fully validated disk-backed batch in one SQL statement."""
+        if count == 0:
+            return 0
+        deadline = time.monotonic() + 30
+        connection = self.connection
+        while True:
+            with connection._lock:
+                if not connection.in_transaction:
+                    return self._merge_staged_locked(path, count)
+            if time.monotonic() >= deadline:
+                raise TimeoutError("database remained busy before import")
+            time.sleep(0.01)
+
+    def _merge_staged_locked(self, path: Path, count: int) -> int:
+        connection = self.connection
+        connection.execute("ATTACH DATABASE ? AS spotify_import_stage", (str(path),))
+        try:
+            connection.execute("BEGIN IMMEDIATE")
+            connection.execute(
+                """INSERT INTO personal_events
+                   (id, source, event_type, occurred_at, subject, canonical_url,
+                    payload_json, provenance_json)
+                   SELECT id, source, event_type, occurred_at, subject, canonical_url,
+                          payload_json, provenance_json
+                   FROM spotify_import_stage.events WHERE 1 ORDER BY rowid
+                   ON CONFLICT(id) DO UPDATE SET
+                     source=excluded.source, event_type=excluded.event_type,
+                     occurred_at=excluded.occurred_at, subject=excluded.subject,
+                     canonical_url=excluded.canonical_url, payload_json=excluded.payload_json,
+                     provenance_json=excluded.provenance_json"""
+            )
+            connection.commit()
+        except Exception:
+            connection.rollback()
+            raise
+        finally:
+            connection.execute("DETACH DATABASE spotify_import_stage")
+        return count
 
     def count_personal_events(self) -> int:
         return int(

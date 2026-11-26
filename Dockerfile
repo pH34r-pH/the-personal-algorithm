@@ -7,4 +7,4 @@ RUN useradd --create-home --uid 10001 appuser && mkdir -p /data-runtime /data-pe
 USER appuser
 ENV TPA_DATABASE=/data-runtime/personal-algorithm.sqlite3
 EXPOSE 8000
-CMD ["uvicorn", "personal_algorithm.application:app_from_env", "--factory", "--host", "0.0.0.0", "--port", "8000"]
+CMD ["uvicorn", "personal_algorithm.application:app_from_env", "--factory", "--host", "0.0.0.0", "--port", "8000", "--no-access-log"]

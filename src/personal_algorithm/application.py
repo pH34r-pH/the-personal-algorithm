@@ -209,7 +209,10 @@ def create_private_app(
     youtube_http=None,
 ) -> FastAPI:
     services = _build_services(settings, credentials, github_http, oauth_http)
-    app = FastAPI(title="The Personal Algorithm", version="0.1.0")
+    app = FastAPI(
+        title="The Personal Algorithm", version="0.1.0",
+        docs_url=None, redoc_url=None, openapi_url=None,
+    )
     _include_private_routers(app, settings, services, youtube_http)
 
     @app.get("/", response_class=HTMLResponse)
@@ -222,5 +225,8 @@ def create_private_app(
 
     return app
 
+
 def app_from_env() -> FastAPI:
+    if os.getenv("TPA_TRUSTED_HOST_AUTH") != "azure-container-apps-easy-auth":
+        raise RuntimeError("hosted application requires TPA_TRUSTED_HOST_AUTH=azure-container-apps-easy-auth")
     return create_private_app(ApplicationSettings.from_env())

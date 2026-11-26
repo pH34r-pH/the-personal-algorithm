@@ -16,6 +16,30 @@ The public landing page and health endpoint remain separate from owner-only rout
 `TPA_ARCHIVE_MAX_BYTES` defaults to 50 GiB per upload. Production should mount raw
 archive storage separately from the live SQLite snapshot.
 
+When `TPA_DATABASE_SNAPSHOT` is configured, commits copy a local SQLite backup
+to a uniquely named temporary file next to the snapshot, then replace the
+snapshot. Each operation removes only its own temporary file. This avoids a
+shared staging filename but does not fence concurrent revisions or close the
+window between a local commit and snapshot publication. A failed snapshot can
+leave the local database newer than the persistent copy; do not infer safe
+scale-to-zero or recovery solely from this staging behavior.
+
+The recovery candidate checks SQLite integrity before restoring a snapshot.
+When a local database already exists, startup compares both databases through
+read-only connections. A difference stops startup and preserves both copies.
+For a missing local database, the candidate verifies a temporary local copy
+before publishing it with an atomic link in the same directory. A local database
+created during staging takes precedence and must match before startup continues.
+
+If startup requests recovery, stop writers and preserve both copies and their
+sidecars before inspection. Record the deployed revision and recovery reason.
+Check integrity and compare read-only copies in an isolated environment, then
+have the operator choose the authoritative copy. Keep the originals available
+through the restore and rollback exercise. The hosting work in
+[issue #94](https://github.com/pH34r-pH/the-personal-algorithm/issues/94) owns
+cross-revision fencing, remote durability, Azure Files semantics, and recovery
+timing before a configuration change.
+
 GitHub additionally requires all of:
 
 ```text
@@ -122,13 +146,31 @@ require private validation. Do not upload personal archives or account results t
 
 ## Start and verification
 
+Use the loopback development entrypoint for the unauthenticated local demo API.
+The package commands `personal-algorithm-demo` and `personal-algorithm-ingest` run
+the demo and configured ingestion, respectively. Neither starts an HTTP server.
+
 ```sh
-uvicorn personal_algorithm.application:app_from_env --factory
+uvicorn personal_algorithm.api:app --host 127.0.0.1 --reload
 ```
 
-The application origin must remain behind the trusted identity-aware front end described
-in [instance authentication](instance-auth.md). An archive-only start does not make a
-caller-supplied identity header safe on an exposed origin.
+The container starts the owner-protected application with the following command.
+Set `TPA_TRUSTED_HOST_AUTH=azure-container-apps-easy-auth` only for a configured
+deployment that meets the [instance authentication](instance-auth.md) contract.
+
+```sh
+uvicorn personal_algorithm.application:app_from_env --factory --host 0.0.0.0 --port 8000 --no-access-log
+```
+
+The landing page and health probe are public. The hosted app disables the interactive
+API docs and schema routes. The container disables Uvicorn access logs because OAuth
+callback query strings contain short-lived codes and state. Configure any upstream
+request logging to omit those query strings as well.
+
+CI builds the container from source without publishing it. Published container workflow
+artifacts contain image identifiers. The test report workflows upload generated mutation
+and structural-quality reports. Private archives, state databases, and credential material
+belong outside the build context and report paths.
 
 Before a real connection session, privately verify the deployed revision, owner sign-in,
 origin protection, persistent storage, backup behavior and the configured provider's

@@ -3,14 +3,19 @@
 from __future__ import annotations
 
 import hashlib
+import io
 import json
+import sqlite3
 import tarfile
+import tempfile
 import zipfile
+from contextlib import closing
 from dataclasses import asdict, dataclass
 from datetime import datetime
 from pathlib import Path
 
 from .archives import ArchiveInbox, ArchiveRecord
+from .json_array_stream import iter_json_array, iter_json_array_text
 from .models import PersonalEvent
 from .store import Store
 
@@ -39,21 +44,23 @@ def import_spotify_history(
     unsupported = 0
 
     try:
-        for member_name, payload in _json_payloads(path):
+        for member_name, open_member, binary in _json_members(path):
             files_scanned += 1
-            rows = _stream_rows(payload)
-            if rows is None:
+            if not _is_array(open_member, binary):
+                with open_member() as stream:
+                    json.load(stream)
                 unsupported += 1
                 continue
-
-            rows_seen += len(rows)
-            events = tuple(
-                event
-                for index, row in enumerate(rows)
-                if (event := _event_from_row(record.sha256, member_name, index, row))
-                is not None
-            )
-            events_written += store.put_personal_events(events)
+            with tempfile.TemporaryDirectory(prefix="spotify-import-") as directory:
+                staging = Path(directory) / "events.sqlite3"
+                supported, count, written = _stage_member(
+                    staging, open_member, binary, record.sha256, member_name
+                )
+                if not supported:
+                    unsupported += 1
+                    continue
+                rows_seen += count
+                events_written += store.merge_staged_personal_events(staging, written)
 
         if rows_seen == 0:
             raise ValueError("no Spotify Extended Streaming History rows found")
@@ -80,55 +87,77 @@ def import_spotify_history(
         raise
 
 
-def _json_payloads(path: Path):
+def _json_members(path: Path):
     if zipfile.is_zipfile(path):
         with zipfile.ZipFile(path) as archive:
             for member in archive.infolist():
-                if member.is_dir() or not member.filename.lower().endswith(".json"):
-                    continue
-                with archive.open(member) as handle:
-                    yield member.filename, json.load(handle)
+                if not member.is_dir() and member.filename.lower().endswith(".json"):
+                    yield member.filename, lambda member=member: archive.open(member), True
         return
-
     if tarfile.is_tarfile(path):
         with tarfile.open(path, "r:*") as archive:
             for member in archive.getmembers():
-                if not member.isfile() or not member.name.lower().endswith(".json"):
-                    continue
-                handle = archive.extractfile(member)
-                if handle is None:
-                    continue
-                with handle:
-                    yield member.name, json.load(handle)
+                if member.isfile() and member.name.lower().endswith(".json"):
+                    yield member.name, lambda member=member: archive.extractfile(member), True
         return
-
     if path.suffix.lower() == ".json":
-        with path.open(encoding="utf-8") as handle:
-            yield path.name, json.load(handle)
+        yield path.name, lambda: path.open(encoding="utf-8"), False
 
 
-def _stream_rows(payload) -> list[dict] | None:
-    if not isinstance(payload, list) or not payload:
-        return None
-    rows = [row for row in payload if isinstance(row, dict)]
-    if not rows:
-        return None
-    sample = rows[0]
-    if "ts" not in sample or "ms_played" not in sample:
-        return None
-    if not any(
-        key in sample
-        for key in (
-            "spotify_track_uri",
-            "spotify_episode_uri",
-            "audiobook_uri",
-            "master_metadata_track_name",
-            "episode_name",
-            "audiobook_chapter_title",
-        )
-    ):
-        return None
-    return rows
+def _is_array(open_member, binary: bool) -> bool:
+    encoding = None
+    if binary:
+        with open_member() as stream:
+            encoding = json.detect_encoding(io.BufferedReader(stream).read(4))
+    with open_member() as stream:
+        reader = (io.TextIOWrapper(stream, encoding=encoding, errors="surrogatepass")
+                  if binary else stream)
+        while char := reader.read(1):
+            if char not in " \t\r\n":
+                return char == "["
+        return False
+
+
+def _rows(open_member, binary: bool):
+    with open_member() as stream:
+        values = iter_json_array(stream) if binary else iter_json_array_text(stream)
+        yield from (row for row in values if isinstance(row, dict))
+
+
+def _supported_sample(sample: dict) -> bool:
+    return ("ts" in sample and "ms_played" in sample and any(
+        key in sample for key in ("spotify_track_uri", "spotify_episode_uri", "audiobook_uri",
+                                  "master_metadata_track_name", "episode_name", "audiobook_chapter_title")
+    ))
+
+
+def _stage_member(path, open_member, binary, archive_sha, member_name):
+    supported = None
+    rows_seen = written = 0
+
+    def serialized():
+        nonlocal supported, rows_seen, written
+        for row in _rows(open_member, binary):
+            if supported is None:
+                supported = _supported_sample(row)
+            index = rows_seen
+            rows_seen += 1
+            if not supported:
+                continue
+            event = _event_from_row(archive_sha, member_name, index, row)
+            if event is not None:
+                written += 1
+                yield (event.id, event.source, event.event_type,
+                       event.occurred_at.isoformat() if event.occurred_at else None,
+                       event.subject, event.canonical_url, json.dumps(event.payload, sort_keys=True),
+                       json.dumps(event.provenance, sort_keys=True))
+
+    with closing(sqlite3.connect(path)) as stage:
+        stage.execute("""CREATE TABLE events (id TEXT, source TEXT, event_type TEXT, occurred_at TEXT,
+                      subject TEXT, canonical_url TEXT, payload_json TEXT, provenance_json TEXT)""")
+        stage.executemany("INSERT INTO events VALUES (?, ?, ?, ?, ?, ?, ?, ?)", serialized())
+        stage.commit()
+    return bool(supported), rows_seen, written
 
 
 def _event_from_row(

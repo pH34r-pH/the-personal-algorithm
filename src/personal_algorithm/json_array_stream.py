@@ -6,7 +6,7 @@ import codecs
 import io
 import json
 from collections.abc import Iterator
-from typing import BinaryIO
+from typing import BinaryIO, TextIO
 
 _WHITESPACE = " \t\r\n"
 
@@ -101,6 +101,17 @@ def iter_json_array(stream: BinaryIO, *, chunk_size: int = 65536) -> Iterator[ob
         raise ValueError("chunk size must be positive")
     scanner = _ArrayScanner()
     for chunk in _decoded_chunks(stream, chunk_size):
+        yield from scanner.feed(chunk)
+    if not scanner.finished:
+        raise ValueError("incomplete JSON array")
+
+
+def iter_json_array_text(stream: TextIO, *, chunk_size: int = 65536) -> Iterator[object]:
+    """Read one array value at a time from an already decoded text stream."""
+    if chunk_size < 1:
+        raise ValueError("chunk size must be positive")
+    scanner = _ArrayScanner()
+    while chunk := stream.read(chunk_size):
         yield from scanner.feed(chunk)
     if not scanner.finished:
         raise ValueError("incomplete JSON array")

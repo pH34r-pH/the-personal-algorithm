@@ -29,3 +29,13 @@ Each source row becomes one `PersonalEvent`:
 The event ID includes the archive hash, member path, row index and full row payload. This makes re-importing the same archive idempotent without collapsing distinct rows that happen to contain identical playback data.
 
 Raw archives remain retained after import. Provider-specific parser changes can therefore be replayed without requesting the export again.
+
+Supported JSON arrays are read one row at a time and staged in a private
+operating-system temporary directory. A complete member is validated before its
+events are applied in one database transaction; previously completed members
+remain committed if a later member fails. Temporary staging is removed on
+normal completion or handled errors. An abrupt process termination can leave
+temporary files until the operating system or hosting environment removes them,
+so temporary storage must be protected like the source archive. Non-array JSON
+still uses the ordinary whole-file decoder and is not covered by the streaming
+memory bound.

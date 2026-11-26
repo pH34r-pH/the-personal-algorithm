@@ -7,6 +7,7 @@ Background work and startup still require production qualification.
 from __future__ import annotations
 
 import asyncio
+import math
 from collections.abc import Callable
 from typing import Any
 
@@ -16,22 +17,41 @@ from .leased_snapshot import SnapshotUnavailable
 
 
 class _DisconnectableReceive:
-    def __init__(self, receive):
+    def __init__(self, receive, idle_timeout: float):
         self._receive = receive
         self.disconnected = asyncio.Event()
+        self.timed_out = False
+        self._idle_timeout = idle_timeout
+        self._remaining = idle_timeout
+        self._body_complete = False
 
     async def __call__(self):
         if self.disconnected.is_set():
             return {"type": "http.disconnect"}
         inbound = asyncio.create_task(self._receive())
         stop = asyncio.create_task(self.disconnected.wait())
+        loop = asyncio.get_running_loop()
+        started = loop.time()
         try:
-            done, _ = await asyncio.wait((inbound, stop), return_when=asyncio.FIRST_COMPLETED)
+            timeout = None if self._body_complete else max(0.0, self._remaining)
+            done, _ = await asyncio.wait(
+                (inbound, stop), timeout=timeout, return_when=asyncio.FIRST_COMPLETED
+            )
             if stop in done:
+                return {"type": "http.disconnect"}
+            if not done:
+                self.timed_out = True
+                self.disconnected.set()
                 return {"type": "http.disconnect"}
             message = inbound.result()
             if message["type"] == "http.disconnect":
                 self.disconnected.set()
+            elif message["type"] == "http.request":
+                self._body_complete = not message.get("more_body", False)
+                if message.get("body"):
+                    self._remaining = self._idle_timeout
+                else:
+                    self._remaining -= loop.time() - started
             return message
         finally:
             for task in (inbound, stop):
@@ -40,15 +60,23 @@ class _DisconnectableReceive:
             await asyncio.gather(inbound, stop, return_exceptions=True)
 
 
+class _RequestBodyTimeout(Exception):
+    pass
+
+
 class FencedHttpGate:
     """Serialize HTTP requests, check the lease, and roll back unfinished work."""
 
     def __init__(self, app: Any, *, verify: Callable[[], None], cleanup: Callable[[], None],
-                 check_complete: Callable[[], None] | None = None):
+                 check_complete: Callable[[], None] | None = None,
+                 body_idle_timeout: float = 120.0):
+        if not math.isfinite(body_idle_timeout) or body_idle_timeout <= 0:
+            raise ValueError("body idle timeout must be positive")
         self._app = app
         self._verify = verify
         self._cleanup = cleanup
         self._check_complete = check_complete
+        self._body_idle_timeout = body_idle_timeout
         self._lock = asyncio.Lock()
         self._broken = False
 
@@ -69,11 +97,15 @@ class FencedHttpGate:
                 cancelled = True
                 receive.disconnected.set()
             except ClientDisconnect:
+                if receive.timed_out:
+                    raise _RequestBodyTimeout from None
                 if receive.disconnected.is_set():
                     raise asyncio.CancelledError from None
                 raise
         if cancelled:
             raise asyncio.CancelledError
+        if receive.timed_out:
+            raise _RequestBodyTimeout
 
     async def _cleanup_safely(self):
         # Cleanup must finish before another request can enter.
@@ -103,7 +135,7 @@ class FencedHttpGate:
             return
         async with self._lock:
             started = False
-            wrapped_receive = _DisconnectableReceive(receive)
+            wrapped_receive = _DisconnectableReceive(receive, self._body_idle_timeout)
 
             async def checked_send(message):
                 nonlocal started
@@ -122,6 +154,11 @@ class FencedHttpGate:
                     raise SnapshotUnavailable("request cleanup failed")
                 await asyncio.to_thread(self._verify)
                 await self._wait_for_handler(scope, wrapped_receive, checked_send)
+            except _RequestBodyTimeout:
+                if started:
+                    raise
+                await send({"type": "http.response.start", "status": 408, "headers": []})
+                await send({"type": "http.response.body", "body": b"Request body timed out"})
             except SnapshotUnavailable:
                 if started:
                     # Headers are already on the wire; abort rather than emit a

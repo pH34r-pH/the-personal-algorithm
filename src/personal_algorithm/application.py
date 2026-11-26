@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import math
 import os
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
@@ -223,7 +224,10 @@ def create_private_app(
     oauth_http=None,
     youtube_http=None,
     leased_snapshot: LeasedSnapshot | None = None,
+    body_idle_timeout: float = 120.0,
 ) -> FastAPI:
+    if leased_snapshot is not None and (not math.isfinite(body_idle_timeout) or body_idle_timeout <= 0):
+        raise ValueError("body idle timeout must be positive and finite")
     services = _build_services(settings, credentials, github_http, oauth_http, leased_snapshot)
 
     @asynccontextmanager
@@ -247,6 +251,7 @@ def create_private_app(
             verify=services[0].connection.check_available,
             cleanup=services[0].connection.finish_request,
             check_complete=services[0].connection.finish_request,
+            body_idle_timeout=body_idle_timeout,
         )
 
     @app.get("/", response_class=HTMLResponse)

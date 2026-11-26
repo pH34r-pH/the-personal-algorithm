@@ -3,7 +3,7 @@ import threading
 
 import pytest
 
-from personal_algorithm.fenced_http import FencedHttpGate
+from personal_algorithm.fenced_http import FencedHttpGate, _DisconnectableReceive
 from personal_algorithm.leased_snapshot import SnapshotUnavailable
 
 
@@ -200,4 +200,21 @@ def test_independently_cancelled_handler_fails_closed():
         await gate({"type": "http", "path": "/second"}, None, send)
         assert calls == ["/first"]
         assert sent[0]["status"] == 503
+    asyncio.run(scenario())
+
+
+def test_idle_budget_resets_on_data_and_excludes_processing_time():
+    async def scenario():
+        count = 0
+        async def receive():
+            nonlocal count
+            await asyncio.sleep(0.04)
+            count += 1
+            return {"type": "http.request", "body": b"x", "more_body": count < 3}
+        reader = _DisconnectableReceive(receive, idle_timeout=0.1)
+        for _ in range(3):
+            message = await reader()
+            assert message["body"] == b"x"
+            await asyncio.sleep(0.12)  # Processing time isn't client idle time.
+        assert not reader.timed_out
     asyncio.run(scenario())

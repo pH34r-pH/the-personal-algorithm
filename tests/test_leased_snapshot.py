@@ -443,3 +443,52 @@ def test_cancelled_stalled_upload_cleans_up_and_health_remains_available(tmp_pat
         asyncio.run(scenario())
     finally:
         app.state.store.connection.close()
+
+
+@pytest.mark.parametrize("empty_frames", [False, True])
+def test_idle_upload_times_out_and_cleans_up(tmp_path, empty_frames):
+    blob = FakeBlob(_seed_database(tmp_path / "seed.sqlite"))
+    archive_dir = tmp_path / "archives"
+    settings = ApplicationSettings(database=str(tmp_path / "local.sqlite"),
+                                   owner_object_id="owner", archive_dir=str(archive_dir))
+    app = create_private_app(settings, leased_snapshot=LeasedSnapshot(blob), body_idle_timeout=0.1)
+
+    async def scenario():
+        first = True
+        never = asyncio.Event()
+        sent = []
+        async def receive():
+            nonlocal first
+            if first:
+                first = False
+                return {"type": "http.request", "body": b"partial", "more_body": True}
+            if empty_frames:
+                await asyncio.sleep(0.02)
+                return {"type": "http.request", "body": b"", "more_body": True}
+            await never.wait()
+        async def send(message): sent.append(message)
+        scope = {"type": "http", "asgi": {"version": "3.0"}, "http_version": "1.1",
+                 "method": "POST", "scheme": "http", "path": "/archives/upload",
+                 "raw_path": b"/archives/upload", "query_string": b"", "root_path": "",
+                 "headers": [(b"x-ms-client-principal-id", b"owner"),
+                             (b"x-archive-filename", b"test.zip")],
+                 "client": ("127.0.0.1", 1), "server": ("localhost", 80)}
+        await asyncio.wait_for(app(scope, receive, send), 2)
+        assert sent[0]["status"] == 408
+        assert list(archive_dir.glob("archive-*")) == []
+        assert app.state.store.connection.execute("SELECT COUNT(*) FROM archive_uploads").fetchone() == (0,)
+    try:
+        asyncio.run(scenario())
+    finally:
+        app.state.store.connection.close()
+
+
+@pytest.mark.parametrize("timeout", [0.0, -1.0, float("inf"), float("nan")])
+def test_invalid_idle_timeout_fails_before_acquiring_lease(tmp_path, timeout):
+    blob = FakeBlob(_seed_database(tmp_path / "seed.sqlite"))
+    settings = ApplicationSettings(database=str(tmp_path / "local.sqlite"),
+                                   owner_object_id="owner", archive_dir=str(tmp_path / "archives"))
+    with pytest.raises(ValueError, match="timeout"):
+        create_private_app(settings, leased_snapshot=LeasedSnapshot(blob), body_idle_timeout=timeout)
+    assert blob.active is None
+    assert not (tmp_path / "local.sqlite").exists()

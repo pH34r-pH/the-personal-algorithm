@@ -125,7 +125,7 @@ class _DurableConnection:
         fd, local_name = tempfile.mkstemp(prefix="personal-algorithm-", suffix=".sqlite3")
         os.close(fd)
         local_copy = Path(local_name)
-        remote_tmp = snapshot.with_suffix(snapshot.suffix + ".tmp")
+        remote_tmp = None
         try:
             backup = sqlite3.connect(str(local_copy))
             try:
@@ -133,11 +133,19 @@ class _DurableConnection:
                 backup.commit()
             finally:
                 backup.close()
-            shutil.copyfile(local_copy, remote_tmp)
+            remote_fd, remote_name = tempfile.mkstemp(
+                prefix=f".{snapshot.name}.", suffix=".tmp", dir=snapshot.parent
+            )
+            remote_tmp = Path(remote_name)
+            with os.fdopen(remote_fd, "wb") as destination, local_copy.open("rb") as source:
+                shutil.copyfileobj(source, destination)
             os.replace(remote_tmp, snapshot)
         finally:
-            local_copy.unlink(missing_ok=True)
-            remote_tmp.unlink(missing_ok=True)
+            try:
+                local_copy.unlink(missing_ok=True)
+            finally:
+                if remote_tmp is not None:
+                    remote_tmp.unlink(missing_ok=True)
 
 
 class Store:

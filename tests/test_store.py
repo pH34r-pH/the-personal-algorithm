@@ -1,6 +1,7 @@
 import sqlite3
 import threading
 from datetime import UTC, datetime
+from pathlib import Path
 
 import pytest
 
@@ -161,3 +162,80 @@ def test_staged_merge_is_included_in_restorable_snapshot(tmp_path):
     assert store.merge_staged_personal_events(stage, 1) == 1
     restored = store_module.Store(tmp_path / "restored.sqlite3", snapshot_path=snapshot)
     assert restored.connection.execute("SELECT id FROM personal_events").fetchall() == [("one",)]
+
+
+@pytest.mark.parametrize("failure", ["copy", "replace"])
+def test_failed_snapshot_publish_preserves_previous_snapshot_and_unrelated_temp(
+    tmp_path, monkeypatch, failure
+):
+    live = tmp_path / "live.sqlite3"
+    snapshot = tmp_path / "persistent" / "state.sqlite3"
+    store = store_module.Store(live, snapshot_path=snapshot)
+    store.connection.execute("CREATE TABLE snapshot_probe (value TEXT)")
+    store.connection.execute("INSERT INTO snapshot_probe VALUES ('previous')")
+    store.connection.commit()
+    original = snapshot.read_bytes()
+    unrelated = snapshot.with_suffix(snapshot.suffix + ".tmp")
+    unrelated.write_bytes(b"unrelated temporary file")
+    store.connection.execute("INSERT INTO snapshot_probe VALUES ('local-only')")
+
+    def fail_publish(*_args, **_kwargs):
+        raise OSError("injected snapshot failure")
+
+    if failure == "copy":
+        monkeypatch.setattr(store_module.shutil, "copyfileobj", fail_publish)
+    else:
+        monkeypatch.setattr(store_module.os, "replace", fail_publish)
+    with pytest.raises(OSError, match="injected snapshot failure"):
+        store.connection.commit()
+    assert snapshot.read_bytes() == original
+    assert unrelated.read_bytes() == b"unrelated temporary file"
+    assert list(snapshot.parent.glob(f".{snapshot.name}.*.tmp")) == []
+    assert store.connection.execute("SELECT value FROM snapshot_probe ORDER BY value").fetchall() == [
+        ("local-only",), ("previous",)
+    ]
+
+
+def test_overlapping_snapshots_use_distinct_staging_files(tmp_path, monkeypatch):
+    snapshot = tmp_path / "persistent" / "state.sqlite3"
+    first = store_module.Store(tmp_path / "first.sqlite3", snapshot_path=snapshot)
+    second = store_module.Store(tmp_path / "second.sqlite3", snapshot_path=snapshot)
+    for index, store in enumerate((first, second)):
+        store.connection.execute("CREATE TABLE snapshot_probe (value TEXT)")
+        store.connection.execute("INSERT INTO snapshot_probe VALUES (?)", (str(index),))
+    barrier = threading.Barrier(2, timeout=5)
+    original_copy = store_module.shutil.copyfileobj
+    original_replace = store_module.os.replace
+    staged = []
+    failures = []
+    replace_lock = threading.Lock()
+
+    def synchronized_copy(source, destination):
+        barrier.wait()
+        return original_copy(source, destination)
+
+    def capture_replace(source, destination):
+        with replace_lock:
+            staged.append(Path(source))
+            return original_replace(source, destination)
+
+    def commit(store):
+        try:
+            store.connection.commit()
+        except (OSError, sqlite3.Error, threading.BrokenBarrierError) as exc:
+            failures.append(exc)
+
+    monkeypatch.setattr(store_module.shutil, "copyfileobj", synchronized_copy)
+    monkeypatch.setattr(store_module.os, "replace", capture_replace)
+    threads = [threading.Thread(target=commit, args=(store,)) for store in (first, second)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join(10)
+    assert all(not thread.is_alive() for thread in threads)
+    assert failures == []
+    assert len(staged) == 2 and len(set(staged)) == 2
+    assert all(path.parent == snapshot.parent for path in staged)
+    assert list(snapshot.parent.glob(f".{snapshot.name}.*.tmp")) == []
+    with sqlite3.connect(snapshot) as check:
+        assert check.execute("SELECT value FROM snapshot_probe").fetchone() in (("0",), ("1",))

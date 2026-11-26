@@ -9,6 +9,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from enum import StrEnum
+from math import isfinite
 from typing import Any
 
 
@@ -89,6 +90,15 @@ class Interaction:
     occurred_at: datetime
     explicit: bool = True
     metadata: dict[str, Any] = field(default_factory=dict)
+    impression_id: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class Impression:
+    id: str
+    run_id: str
+    presented_at: datetime
+    candidate_ids: tuple[str, ...]
 
 
 @dataclass(frozen=True, slots=True)
@@ -100,6 +110,23 @@ class Policy:
 
     def weight(self, feature: str) -> float:
         return self.weights.get(feature, 0.0)
+
+
+def finite_number_map(value: Any, name: str) -> dict[str, float]:
+    if not isinstance(value, dict):
+        raise TypeError(f"{name} must map names to finite numbers")
+    result = {}
+    for key, number in value.items():
+        if not isinstance(key, str) or not key.strip() or type(number) not in (int, float):
+            raise ValueError(f"{name} must map names to finite numbers")
+        try:
+            converted = float(number)
+        except OverflowError as exc:
+            raise ValueError(f"{name} must map names to finite numbers") from exc
+        if not isfinite(converted):
+            raise ValueError(f"{name} must map names to finite numbers")
+        result[key] = converted
+    return result
 
 
 def utcnow() -> datetime:

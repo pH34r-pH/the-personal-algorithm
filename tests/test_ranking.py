@@ -1,10 +1,12 @@
 from dataclasses import replace
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime, timedelta, timezone
 
 import pytest
 
 from personal_algorithm.models import Candidate, Policy
 from personal_algorithm.ranking import ReferenceRanker
+from personal_algorithm.ranking_runs import create_ranking_run, replay_ranking_run
+from personal_algorithm.serialization import policy_from_dict, ranked_to_dict
 from personal_algorithm.sources import fixture_candidates
 
 NOW = datetime(2026, 1, 1, 12, tzinfo=UTC)
@@ -89,3 +91,41 @@ def test_topic_affinity_is_zero_for_candidates_without_topics():
 
     assert ranked.score == 0.0
     assert ranked.explanation.contributions[0].value == 0.0
+
+
+def test_frozen_run_has_stable_ties_and_replays_after_inputs_change():
+    later_offset = timezone(timedelta(hours=2))
+    first = _candidate("a", published_at=NOW)
+    second = _candidate("b", published_at=NOW.astimezone(later_offset))
+    policy = Policy(version="synthetic-v1", weights={"recency": -2, "topic_affinity": 0})
+    original = create_ranking_run([second, first], policy, now=NOW)
+    equivalent = create_ranking_run([first, second], policy, now=NOW.astimezone(later_offset))
+    assert original.id != equivalent.id
+    assert original.members == equivalent.members
+    assert original.policy == equivalent.policy
+    assert [member.ranked.candidate.id for member in original.members] == ["a", "b"]
+    assert original.context_version is None and original.context_sha256 is None
+    policy.weights["recency"] = 100
+    first.metadata["edited-after-run"] = True
+    revised = create_ranking_run([first, second], policy, now=NOW + timedelta(days=1))
+    assert revised.policy.sha256 != original.policy.sha256
+    assert revised.members[0].snapshot.sha256 != original.members[0].snapshot.sha256
+    replayed = replay_ranking_run(original)
+    assert [ranked_to_dict(value) for value in replayed] == [
+        ranked_to_dict(member.ranked) for member in original.members
+    ]
+
+
+@pytest.mark.parametrize(("field", "value"), [
+    ("weights", {"recency": float("inf")}),
+    ("topic_affinity", {"topic": float("nan")}),
+    ("source_affinity", {"fixture": "3.0"}),
+    ("weights", {"recency": True}),
+])
+def test_invalid_weights_or_affinities_fail_before_ranking(field, value):
+    payload = {"version": "bad", "weights": {}, field: value}
+    with pytest.raises(ValueError, match="finite numbers"):
+        policy_from_dict(payload)
+    policy = Policy(**payload)
+    with pytest.raises(ValueError, match="finite numbers"):
+        create_ranking_run([_candidate("candidate", published_at=NOW)], policy, now=NOW)

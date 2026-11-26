@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime
-from math import exp
+from math import exp, isfinite
 
 from .models import (
     Candidate,
@@ -11,6 +11,7 @@ from .models import (
     Policy,
     RankedCandidate,
     ScoreContribution,
+    finite_number_map,
 )
 
 
@@ -31,6 +32,11 @@ class ReferenceRanker:
         now: datetime | None = None,
     ) -> RankedCandidate:
         now = now or datetime.now(UTC)
+        policy = Policy(
+            policy.version, finite_number_map(policy.weights, "weights"),
+            finite_number_map(policy.topic_affinity, "topic_affinity"),
+            finite_number_map(policy.source_affinity, "source_affinity"),
+        )
         features = {
             "topic_affinity": self._topic_affinity(candidate, policy),
             "source_affinity": policy.source_affinity.get(candidate.source, 0.0),
@@ -53,6 +59,8 @@ class ReferenceRanker:
             for name, value in features.items()
         )
         score = sum(item.contribution for item in contributions)
+        if not isfinite(score):
+            raise ValueError("reference ranker produced a non-finite score")
         explanation = Explanation(final_score=score, contributions=contributions)
         return RankedCandidate(
             candidate=candidate,
@@ -72,6 +80,8 @@ class ReferenceRanker:
     @staticmethod
     def _recency(candidate: Candidate, now: datetime) -> float:
         timestamp = candidate.published_at or candidate.discovered_at
+        if now.utcoffset() is None or timestamp.utcoffset() is None:
+            raise ValueError("ranking evaluation and candidate timestamps must include a timezone")
         hours = max(0.0, (now - timestamp).total_seconds() / 3600)
         # Smooth, bounded decay: 1.0 now, ~0.5 after 72 hours.
         return exp(-hours * 0.6931471805599453 / 72.0)

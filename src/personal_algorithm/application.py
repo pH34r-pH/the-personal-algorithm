@@ -244,7 +244,7 @@ def create_private_app(
     if leased_snapshot is not None:
         app.add_middleware(
             FencedHttpGate,
-            verify=leased_snapshot.verify,
+            verify=services[0].connection.check_available,
             cleanup=services[0].connection.finish_request,
             check_complete=services[0].connection.finish_request,
         )

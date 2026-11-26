@@ -290,6 +290,24 @@ def test_fenced_application_fails_closed_after_lease_loss(tmp_path):
         assert client.get("/health").status_code == 503
 
 
+def test_health_rejects_ambiguous_snapshot_publication(tmp_path):
+    blob = FakeBlob(_seed_database(tmp_path / "seed.sqlite"))
+    settings = ApplicationSettings(database=str(tmp_path / "local.sqlite"),
+                                   owner_object_id="owner", archive_dir=str(tmp_path / "archives"))
+    app = create_private_app(settings, leased_snapshot=LeasedSnapshot(blob))
+
+    @app.post("/synthetic-write")
+    def write():
+        app.state.store.connection.execute("INSERT INTO fence_probe VALUES ('uncertain')")
+        app.state.store.connection.commit()
+        return {"ok": True}
+
+    with TestClient(app) as client:
+        blob.fail_after_write = True
+        assert client.post("/synthetic-write").status_code == 503
+        assert client.get("/health").status_code == 503
+
+
 def test_fenced_application_serializes_transactions_across_requests(tmp_path):
     blob = FakeBlob(_seed_database(tmp_path / "seed.sqlite"))
     settings = ApplicationSettings(database=str(tmp_path / "local.sqlite"),
@@ -369,6 +387,58 @@ def test_cancelled_fastapi_worker_finishes_before_next_transaction(tmp_path):
         assert app.state.store.connection.execute("SELECT value FROM fence_probe ORDER BY value").fetchall() == [
             ("first",), ("initial",), ("second",)
         ]
+    try:
+        asyncio.run(scenario())
+    finally:
+        app.state.store.connection.close()
+
+
+@pytest.mark.parametrize("disconnect_mode", ["cancel", "network"])
+def test_cancelled_stalled_upload_cleans_up_and_health_remains_available(tmp_path, disconnect_mode):
+    blob = FakeBlob(_seed_database(tmp_path / "seed.sqlite"))
+    archive_dir = tmp_path / "archives"
+    settings = ApplicationSettings(database=str(tmp_path / "local.sqlite"),
+                                   owner_object_id="owner", archive_dir=str(archive_dir))
+    app = create_private_app(settings, leased_snapshot=LeasedSnapshot(blob))
+
+    async def scenario():
+        waiting = asyncio.Event()
+        never = asyncio.Event()
+        first_chunk = True
+        sent = []
+        async def upload_receive():
+            nonlocal first_chunk
+            if first_chunk:
+                first_chunk = False
+                return {"type": "http.request", "body": b"synthetic partial", "more_body": True}
+            waiting.set()
+            await never.wait()
+            return {"type": "http.disconnect"}
+        async def send(message): sent.append(message)
+        def scope(path, method, headers=None):
+            return {"type": "http", "asgi": {"version": "3.0"}, "http_version": "1.1",
+                    "method": method, "scheme": "http", "path": path,
+                    "raw_path": path.encode(), "query_string": b"", "root_path": "",
+                    "headers": headers or [], "client": ("127.0.0.1", 1), "server": ("localhost", 80)}
+        headers = [(b"x-ms-client-principal-id", b"owner"), (b"x-archive-filename", b"test.zip")]
+        upload = asyncio.create_task(app(scope("/archives/upload", "POST", headers), upload_receive, send))
+        try:
+            await asyncio.wait_for(waiting.wait(), 2)
+            await asyncio.wait_for(app(scope("/health", "GET"), None, send), 2)
+            assert sent[0]["status"] == 200
+            assert list(archive_dir.glob("archive-*"))
+            if disconnect_mode == "cancel":
+                upload.cancel()
+            else:
+                never.set()
+            with pytest.raises(asyncio.CancelledError):
+                await asyncio.wait_for(upload, 2)
+            assert list(archive_dir.glob("archive-*")) == []
+            assert app.state.store.connection.execute("SELECT COUNT(*) FROM archive_uploads").fetchone() == (0,)
+        finally:
+            if not upload.done():
+                upload.cancel()
+                await asyncio.gather(upload, return_exceptions=True)
     try:
         asyncio.run(scenario())
     finally:

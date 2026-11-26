@@ -174,6 +174,12 @@ class _DurableConnection:
             raise SnapshotUnavailable("local state requires recovery")
         if self._leased_snapshot is not None:
             self._leased_snapshot.verify()
+        if self._failed:
+            raise SnapshotUnavailable("local state requires recovery")
+
+    def check_available(self) -> None:
+        """Check snapshot and local-failure state without waiting on a request."""
+        self._check()
 
     def execute(self, *args, **kwargs):
         with self._lock:

@@ -7,6 +7,7 @@ import os
 import shutil
 import sqlite3
 import tempfile
+import threading
 import time
 from pathlib import Path
 from typing import Any
@@ -89,17 +90,32 @@ class _DurableConnection:
     def __init__(self, connection: sqlite3.Connection, snapshot: Path | None) -> None:
         self._connection = connection
         self._snapshot = snapshot
+        self._lock = threading.RLock()
 
     def __getattr__(self, name: str) -> Any:
         return getattr(self._connection, name)
 
+    def execute(self, *args, **kwargs):
+        with self._lock:
+            return self._connection.execute(*args, **kwargs)
+
+    def executemany(self, *args, **kwargs):
+        with self._lock:
+            return self._connection.executemany(*args, **kwargs)
+
+    def executescript(self, *args, **kwargs):
+        with self._lock:
+            return self._connection.executescript(*args, **kwargs)
+
     def commit(self) -> None:
-        self._connection.commit()
-        if self._snapshot is not None:
-            self._write_snapshot()
+        with self._lock:
+            self._connection.commit()
+            if self._snapshot is not None:
+                self._write_snapshot()
 
     def rollback(self) -> None:
-        self._connection.rollback()
+        with self._lock:
+            self._connection.rollback()
 
     def _write_snapshot(self) -> None:
         snapshot = self._snapshot
@@ -207,6 +223,46 @@ class Store:
         )
         self.connection.commit()
         return len(rows)
+
+    def merge_staged_personal_events(self, path: Path, count: int) -> int:
+        """Commit one fully validated disk-backed batch in one SQL statement."""
+        if count == 0:
+            return 0
+        deadline = time.monotonic() + 30
+        connection = self.connection
+        while True:
+            with connection._lock:
+                if not connection.in_transaction:
+                    return self._merge_staged_locked(path, count)
+            if time.monotonic() >= deadline:
+                raise TimeoutError("database remained busy before import")
+            time.sleep(0.01)
+
+    def _merge_staged_locked(self, path: Path, count: int) -> int:
+        connection = self.connection
+        connection.execute("ATTACH DATABASE ? AS spotify_import_stage", (str(path),))
+        try:
+            connection.execute("BEGIN IMMEDIATE")
+            connection.execute(
+                """INSERT INTO personal_events
+                   (id, source, event_type, occurred_at, subject, canonical_url,
+                    payload_json, provenance_json)
+                   SELECT id, source, event_type, occurred_at, subject, canonical_url,
+                          payload_json, provenance_json
+                   FROM spotify_import_stage.events WHERE 1 ORDER BY rowid
+                   ON CONFLICT(id) DO UPDATE SET
+                     source=excluded.source, event_type=excluded.event_type,
+                     occurred_at=excluded.occurred_at, subject=excluded.subject,
+                     canonical_url=excluded.canonical_url, payload_json=excluded.payload_json,
+                     provenance_json=excluded.provenance_json"""
+            )
+            connection.commit()
+        except Exception:
+            connection.rollback()
+            raise
+        finally:
+            connection.execute("DETACH DATABASE spotify_import_stage")
+        return count
 
     def count_personal_events(self) -> int:
         return int(

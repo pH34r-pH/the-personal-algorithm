@@ -1,5 +1,8 @@
 import sqlite3
+import threading
 from datetime import UTC, datetime
+
+import pytest
 
 import personal_algorithm.store as store_module
 from personal_algorithm.models import PersonalEvent
@@ -87,3 +90,74 @@ def test_personal_events_are_upserted_without_becoming_candidates():
         (event.id,),
     ).fetchone()
     assert row == ("spotify", "stream", "Example Track")
+
+
+def _staging_database(path, rows):
+    connection = sqlite3.connect(path)
+    try:
+        connection.execute("""CREATE TABLE events (id TEXT, source TEXT, event_type TEXT, occurred_at TEXT,
+                           subject TEXT, canonical_url TEXT, payload_json TEXT, provenance_json TEXT)""")
+        connection.executemany("INSERT INTO events VALUES (?, ?, ?, ?, ?, ?, ?, ?)", rows)
+        connection.commit()
+    finally:
+        connection.close()
+
+
+def test_staged_merge_rolls_back_entire_member_and_detaches_after_sql_error(tmp_path):
+    stage = tmp_path / "stage.sqlite3"
+    good = ("one", "spotify", "stream", None, "one", None, "{}", "{}")
+    bad = ("two", "spotify", None, None, "two", None, "{}", "{}")
+    _staging_database(stage, [good, bad])
+    store = store_module.Store()
+    with pytest.raises(sqlite3.IntegrityError):
+        store.merge_staged_personal_events(stage, 2)
+    assert store.count_personal_events() == 0
+    assert [row[1] for row in store.connection.execute("PRAGMA database_list").fetchall()] == ["main"]
+    store.connection.execute("CREATE TABLE after_failure (value TEXT)")
+    store.connection.commit()
+
+
+def test_staged_merge_waits_for_other_connection_transaction(tmp_path):
+    stage = tmp_path / "stage.sqlite3"
+    _staging_database(stage, [("one", "spotify", "stream", None, "one", None, "{}", "{}")])
+    store = store_module.Store()
+    store.connection.execute("CREATE TABLE concurrent_probe (value TEXT)")
+    store.connection.commit()
+    store.connection.execute("INSERT INTO concurrent_probe VALUES ('pending')")
+    started, completed = threading.Event(), threading.Event()
+    failures = []
+
+    def merge():
+        started.set()
+        try:
+            store.merge_staged_personal_events(stage, 1)
+        except (sqlite3.Error, RuntimeError, TimeoutError, OSError) as exc:
+            failures.append(exc)
+        finally:
+            completed.set()
+
+    thread = threading.Thread(target=merge)
+    thread.start()
+    try:
+        assert started.wait(2)
+        assert not completed.wait(0.1)
+        store.connection.commit()
+        assert completed.wait(5)
+    finally:
+        if not completed.is_set():
+            store.connection.rollback()
+        thread.join(5)
+    assert not thread.is_alive()
+    assert failures == []
+    assert store.count_personal_events() == 1
+    assert store.connection.execute("SELECT value FROM concurrent_probe").fetchone() == ("pending",)
+
+
+def test_staged_merge_is_included_in_restorable_snapshot(tmp_path):
+    stage = tmp_path / "stage.sqlite3"
+    _staging_database(stage, [("one", "spotify", "stream", None, "one", None, "{}", "{}")])
+    snapshot = tmp_path / "snapshot" / "state.sqlite3"
+    store = store_module.Store(tmp_path / "live.sqlite3", snapshot_path=snapshot)
+    assert store.merge_staged_personal_events(stage, 1) == 1
+    restored = store_module.Store(tmp_path / "restored.sqlite3", snapshot_path=snapshot)
+    assert restored.connection.execute("SELECT id FROM personal_events").fetchall() == [("one",)]

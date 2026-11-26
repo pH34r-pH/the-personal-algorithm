@@ -35,18 +35,6 @@ def test_decoder_preserves_duplicate_key_and_nonstandard_number_behavior():
     assert actual["f"] == expected["f"] == float("inf")
 
 
-def test_encoding_detection_handles_short_binary_reads():
-    class ShortReader(io.RawIOBase):
-        def __init__(self, data):
-            self.data = io.BytesIO(data)
-
-        def readable(self):
-            return True
-
-        def readinto(self, target):
-            piece = self.data.read(min(len(target), 1))
-            target[:len(piece)] = piece
-            return len(piece)
-
+def test_encoding_detection_handles_short_binary_reads(short_reader):
     raw = '[{"title":"☃"}]'.encode("utf-16")
-    assert list(iter_json_array(ShortReader(raw), chunk_size=1)) == [{"title": "☃"}]
+    assert list(iter_json_array(short_reader(raw), chunk_size=1)) == [{"title": "☃"}]

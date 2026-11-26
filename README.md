@@ -39,7 +39,7 @@ personal-algorithm-ingest --config config.json
 Run the development application with:
 
 ```sh
-uvicorn personal_algorithm.api:app --reload
+uvicorn personal_algorithm.api:app --host 127.0.0.1 --reload
 ```
 
 Do not expose the unauthenticated development server directly to the public Internet.

@@ -122,13 +122,31 @@ require private validation. Do not upload personal archives or account results t
 
 ## Start and verification
 
+Use the loopback development entrypoint for the unauthenticated local demo API.
+The package commands `personal-algorithm-demo` and `personal-algorithm-ingest` run
+the demo and configured ingestion, respectively. Neither starts an HTTP server.
+
 ```sh
-uvicorn personal_algorithm.application:app_from_env --factory
+uvicorn personal_algorithm.api:app --host 127.0.0.1 --reload
 ```
 
-The application origin must remain behind the trusted identity-aware front end described
-in [instance authentication](instance-auth.md). An archive-only start does not make a
-caller-supplied identity header safe on an exposed origin.
+The container starts the owner-protected application with the following command.
+Set `TPA_TRUSTED_HOST_AUTH=azure-container-apps-easy-auth` only for a configured
+deployment that meets the [instance authentication](instance-auth.md) contract.
+
+```sh
+uvicorn personal_algorithm.application:app_from_env --factory --host 0.0.0.0 --port 8000 --no-access-log
+```
+
+The landing page and health probe are public. The hosted app disables the interactive
+API docs and schema routes. The container disables Uvicorn access logs because OAuth
+callback query strings contain short-lived codes and state. Configure any upstream
+request logging to omit those query strings as well.
+
+CI builds the container from source without publishing it. Published container workflow
+artifacts contain image identifiers. The test report workflows upload generated mutation
+and structural-quality reports. Private archives, state databases, and credential material
+belong outside the build context and report paths.
 
 Before a real connection session, privately verify the deployed revision, owner sign-in,
 origin protection, persistent storage, backup behavior and the configured provider's

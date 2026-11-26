@@ -11,6 +11,7 @@ from datetime import UTC, datetime
 import pytest
 from fastapi.testclient import TestClient
 
+import personal_algorithm.application as application_module
 from personal_algorithm.application import ApplicationSettings, create_private_app
 from personal_algorithm.connections import ConnectionStore
 from personal_algorithm.leased_snapshot import LeasedSnapshot, SnapshotUnavailable
@@ -492,3 +493,60 @@ def test_invalid_idle_timeout_fails_before_acquiring_lease(tmp_path, timeout):
         create_private_app(settings, leased_snapshot=LeasedSnapshot(blob), body_idle_timeout=timeout)
     assert blob.active is None
     assert not (tmp_path / "local.sqlite").exists()
+
+
+def test_hosted_environment_selects_fenced_snapshot_explicitly(tmp_path, monkeypatch):
+    blob = FakeBlob(_seed_database(tmp_path / "seed.sqlite"))
+    monkeypatch.setenv("TPA_TRUSTED_HOST_AUTH", "azure-container-apps-easy-auth")
+    monkeypatch.setenv("TPA_OWNER_OBJECT_ID", "owner")
+    monkeypatch.setenv("TPA_DATABASE", str(tmp_path / "local.sqlite"))
+    monkeypatch.setenv("TPA_ARCHIVE_DIR", str(tmp_path / "archives"))
+    monkeypatch.setenv("TPA_BLOB_SNAPSHOT_URL", "configured-url")
+    monkeypatch.setenv("TPA_BLOB_IDENTITY_CLIENT_ID", "configured-identity")
+    monkeypatch.delenv("TPA_DATABASE_SNAPSHOT", raising=False)
+    called = []
+    def configured(url, identity):
+        called.append((url, identity))
+        return LeasedSnapshot(blob)
+    monkeypatch.setattr(application_module, "configured_blob_snapshot", configured)
+    app = application_module.app_from_env()
+    with TestClient(app) as client:
+        assert client.get("/health").status_code == 200
+        assert client.get("/connections").status_code == 401
+    assert called == [("configured-url", "configured-identity")]
+    assert blob.active is None
+
+
+def test_hosted_missing_snapshot_releases_clients_without_creating_state(tmp_path, monkeypatch):
+    blob = FakeBlob(None)
+    closed = []
+    monkeypatch.setenv("TPA_TRUSTED_HOST_AUTH", "azure-container-apps-easy-auth")
+    monkeypatch.setenv("TPA_OWNER_OBJECT_ID", "owner")
+    monkeypatch.setenv("TPA_DATABASE", str(tmp_path / "local.sqlite"))
+    monkeypatch.setenv("TPA_ARCHIVE_DIR", str(tmp_path / "archives"))
+    monkeypatch.setenv("TPA_BLOB_SNAPSHOT_URL", "configured-url")
+    monkeypatch.setenv("TPA_BLOB_IDENTITY_CLIENT_ID", "configured-identity")
+    monkeypatch.delenv("TPA_DATABASE_SNAPSHOT", raising=False)
+    monkeypatch.setattr(application_module, "configured_blob_snapshot",
+                        lambda *_args: LeasedSnapshot(blob, on_close=lambda: closed.append(True)))
+    with pytest.raises(SnapshotUnavailable):
+        application_module.app_from_env()
+    assert not (tmp_path / "local.sqlite").exists()
+    assert blob.data is None
+    assert closed == [True]
+
+
+@pytest.mark.parametrize("url,identity,file_snapshot", [
+    ("url", "", ""), ("", "identity", ""), ("url", "identity", "file"),
+])
+def test_hosted_snapshot_configuration_conflicts_fail_closed(monkeypatch, url, identity, file_snapshot):
+    monkeypatch.setenv("TPA_TRUSTED_HOST_AUTH", "azure-container-apps-easy-auth")
+    monkeypatch.setenv("TPA_OWNER_OBJECT_ID", "owner")
+    monkeypatch.setenv("TPA_BLOB_SNAPSHOT_URL", url)
+    monkeypatch.setenv("TPA_BLOB_IDENTITY_CLIENT_ID", identity)
+    monkeypatch.setenv("TPA_DATABASE_SNAPSHOT", file_snapshot)
+    def unexpected(*args):
+        pytest.fail("snapshot client must not be constructed")
+    monkeypatch.setattr(application_module, "configured_blob_snapshot", unexpected)
+    with pytest.raises(RuntimeError, match="Blob snapshot requires"):
+        application_module.app_from_env()

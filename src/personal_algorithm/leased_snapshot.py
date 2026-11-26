@@ -8,6 +8,7 @@ publication results before this can be used for production persistence.
 from __future__ import annotations
 
 import threading
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any, BinaryIO
 
@@ -25,13 +26,15 @@ class LeasedSnapshot:
     """
 
     def __init__(
-        self, blob: Any, *, duration: int = 60, renew_interval: float = 20.0
+        self, blob: Any, *, duration: int = 60, renew_interval: float = 20.0,
+        on_close: Callable[[], None] | None = None,
     ) -> None:
         if not 15 <= duration <= 60 or not 0 < renew_interval < duration / 2:
             raise ValueError("invalid finite snapshot lease timing")
         self._blob = blob
         self._duration = duration
         self._renew_interval = renew_interval
+        self._on_close = on_close
         self._lease: Any = None
         self._failure: BaseException | None = None
         self._state_lock = threading.Lock()
@@ -130,8 +133,11 @@ class LeasedSnapshot:
             thread.join(timeout)
             if thread.is_alive():
                 raise SnapshotUnavailable("snapshot lease renewal did not stop")
-        if lease is not None:
-            try:
+        try:
+            if lease is not None:
                 lease.release()
-            except Exception as exc:
-                raise SnapshotUnavailable("snapshot lease release failed") from exc
+        except Exception as exc:
+            raise SnapshotUnavailable("snapshot lease release failed") from exc
+        finally:
+            if self._on_close is not None:
+                self._on_close()

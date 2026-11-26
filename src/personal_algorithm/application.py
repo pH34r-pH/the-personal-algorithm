@@ -14,6 +14,7 @@ from fastapi.responses import HTMLResponse
 
 from .archive_api import create_archive_router
 from .archives import ArchiveInbox
+from .azure_blob_snapshot import configured_blob_snapshot
 from .azure_credentials import AzureKeyVaultCredentialStore
 from .bootstrap import BootstrapCoordinator
 from .connections import ConnectionStore
@@ -46,6 +47,8 @@ class ApplicationSettings:
     spotify_client_secret: str = ""
     spotify_redirect_uri: str = ""
     database_snapshot: str | None = None
+    blob_snapshot_url: str = ""
+    blob_identity_client_id: str = ""
     archive_dir: str = "data/archives"
     archive_max_bytes: int = 50 * 1024 * 1024 * 1024
 
@@ -70,6 +73,8 @@ class ApplicationSettings:
             spotify_client_secret=os.getenv("TPA_SPOTIFY_CLIENT_SECRET", ""),
             spotify_redirect_uri=os.getenv("TPA_SPOTIFY_REDIRECT_URI", ""),
             database_snapshot=os.getenv("TPA_DATABASE_SNAPSHOT"),
+            blob_snapshot_url=os.getenv("TPA_BLOB_SNAPSHOT_URL", ""),
+            blob_identity_client_id=os.getenv("TPA_BLOB_IDENTITY_CLIENT_ID", ""),
             archive_dir=os.getenv("TPA_ARCHIVE_DIR", "data/archives"),
             archive_max_bytes=int(
                 os.getenv("TPA_ARCHIVE_MAX_BYTES", str(50 * 1024 * 1024 * 1024))
@@ -268,4 +273,18 @@ def create_private_app(
 def app_from_env() -> FastAPI:
     if os.getenv("TPA_TRUSTED_HOST_AUTH") != "azure-container-apps-easy-auth":
         raise RuntimeError("hosted application requires TPA_TRUSTED_HOST_AUTH=azure-container-apps-easy-auth")
-    return create_private_app(ApplicationSettings.from_env())
+    settings = ApplicationSettings.from_env()
+    if not settings.blob_snapshot_url and not settings.blob_identity_client_id:
+        return create_private_app(settings)
+    if (not settings.blob_snapshot_url or not settings.blob_identity_client_id
+            or settings.database_snapshot):
+        raise RuntimeError("Blob snapshot requires its URL and identity, without a file snapshot")
+    snapshot = configured_blob_snapshot(settings.blob_snapshot_url, settings.blob_identity_client_id)
+    try:
+        return create_private_app(settings, leased_snapshot=snapshot)
+    except Exception:
+        try:
+            snapshot.close()
+        except Exception:  # noqa: BLE001, S110 - preserve the startup failure
+            pass
+        raise

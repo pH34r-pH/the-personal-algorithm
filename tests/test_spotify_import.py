@@ -273,21 +273,9 @@ def test_failed_member_cleans_private_staging_directory(tmp_path, monkeypatch):
     assert store.count_personal_events() == 0
 
 
-def test_binary_array_detection_handles_short_reads():
-    class ShortReader(io.RawIOBase):
-        def __init__(self, data):
-            self.data = io.BytesIO(data)
-
-        def readable(self):
-            return True
-
-        def readinto(self, target):
-            piece = self.data.read(min(len(target), 1))
-            target[:len(piece)] = piece
-            return len(piece)
-
+def test_binary_array_detection_handles_short_reads(short_reader):
     raw = json.dumps([_row("format")]).encode("utf-16")
-    assert spotify_import._is_array(lambda: ShortReader(raw), True)
+    assert spotify_import._is_array(lambda: short_reader(raw), True)
 
 
 def test_raw_utf8_bom_preserves_previous_rejection(tmp_path):

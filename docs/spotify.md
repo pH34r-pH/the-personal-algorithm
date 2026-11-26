@@ -14,8 +14,8 @@ No Spotify OAuth grant is required for the historical bootstrap.
 Spotify documents Extended Streaming History as lifetime account history and includes playback timestamp, platform, milliseconds played, country, IP/user-agent fields, track/episode metadata and URI, start/end reason, shuffle, skip, offline and private-session flags. The importer preserves the complete source row in `PersonalEvent.payload` rather than reducing it to a taste summary.
 
 Reference:
-- https://support.spotify.com/article/understanding-your-data/
-- https://support.spotify.com/article/data-rights-and-privacy-settings/
+- [Understanding your Spotify data](https://support.spotify.com/article/understanding-your-data/)
+- [Spotify data rights and privacy settings](https://support.spotify.com/article/data-rights-and-privacy-settings/)
 
 ## Import semantics
 

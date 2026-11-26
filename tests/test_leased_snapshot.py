@@ -4,10 +4,13 @@ import io
 import sqlite3
 import threading
 import time
+from datetime import UTC, datetime
 
 import pytest
 
+from personal_algorithm.connections import ConnectionStore
 from personal_algorithm.leased_snapshot import LeasedSnapshot, SnapshotUnavailable
+from personal_algorithm.providers import Connection, ConnectionStatus
 from personal_algorithm.store import Store
 
 
@@ -44,6 +47,7 @@ class FakeBlob:
         self.renewed = threading.Event()
         self.renew_failed = threading.Event()
         self.fail_after_write = False
+        self.checks = 0
 
     def require(self, lease):
         if self.active is not lease:
@@ -71,6 +75,7 @@ class FakeBlob:
 
     def get_blob_properties(self, *, lease):
         with self.lock:
+            self.checks += 1
             self.require(lease)
 
     def expire(self):
@@ -210,3 +215,23 @@ def test_fenced_store_rejects_corruption_and_lost_lease(tmp_path):
         store.connection.execute("SELECT * FROM fence_probe")
     with pytest.raises(SnapshotUnavailable):
         store.connection.close()
+
+
+def test_connection_listing_batches_results_and_preserves_fields(tmp_path):
+    blob = FakeBlob(_seed_database(tmp_path / "seed.sqlite"))
+    store = Store(tmp_path / "local.sqlite", leased_snapshot=LeasedSnapshot(blob))
+    connections = ConnectionStore(store)
+    entries = [
+        Connection(
+            provider_id=name, account_label=f"{name} account", status=ConnectionStatus.CONNECTED,
+            granted_scopes=("read", "write"), connected_at=datetime(2026, 1, 1, tzinfo=UTC),
+            credential_ref=f"secret://{name}", metadata={"name": name},
+        )
+        for name in ("zeta", "alpha", "beta")
+    ]
+    for entry in entries:
+        connections.put(entry)
+    blob.checks = 0
+    assert connections.list() == tuple(sorted(entries, key=lambda item: item.provider_id))
+    assert blob.checks == 4
+    store.connection.close()

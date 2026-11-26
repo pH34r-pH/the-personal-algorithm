@@ -9,6 +9,18 @@ from .providers import Connection, ConnectionStatus
 from .store import Store
 
 
+def _connection_from_row(provider_id: str, row) -> Connection:
+    return Connection(
+        provider_id=provider_id,
+        account_label=row[0],
+        status=ConnectionStatus(row[1]),
+        granted_scopes=tuple(json.loads(row[2])),
+        connected_at=datetime.fromisoformat(row[3]),
+        credential_ref=row[4],
+        metadata=json.loads(row[5]),
+    )
+
+
 class ConnectionStore:
     def __init__(self, store: Store) -> None:
         self.store = store
@@ -59,21 +71,12 @@ class ConnectionStore:
         ).fetchone()
         if row is None:
             raise KeyError(f"provider is not connected: {provider_id}")
-        return Connection(
-            provider_id=provider_id,
-            account_label=row[0],
-            status=ConnectionStatus(row[1]),
-            granted_scopes=tuple(json.loads(row[2])),
-            connected_at=datetime.fromisoformat(row[3]),
-            credential_ref=row[4],
-            metadata=json.loads(row[5]),
-        )
+        return _connection_from_row(provider_id, row)
 
     def list(self) -> tuple[Connection, ...]:
-        ids = [
-            row[0]
-            for row in self.store.connection.execute(
-                "SELECT provider_id FROM provider_connections ORDER BY provider_id"
-            )
-        ]
-        return tuple(self.get(provider_id) for provider_id in ids)
+        rows = self.store.connection.execute(
+            """SELECT provider_id, account_label, status, granted_scopes_json,
+                      connected_at, credential_ref, metadata_json
+               FROM provider_connections ORDER BY provider_id"""
+        ).fetchall()
+        return tuple(_connection_from_row(row[0], row[1:]) for row in rows)

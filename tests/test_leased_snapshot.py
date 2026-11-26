@@ -1,5 +1,6 @@
 """Lease-fencing behavior using synthetic bytes and a fake Blob service."""
 
+import asyncio
 import io
 import sqlite3
 import threading
@@ -320,3 +321,55 @@ def test_fenced_application_serializes_transactions_across_requests(tmp_path):
             release.set()
         assert first.result(timeout=5).status_code == 200
         assert second.result(timeout=5).json() == {"values": ["initial", "pending"]}
+
+
+def test_cancelled_fastapi_worker_finishes_before_next_transaction(tmp_path):
+    blob = FakeBlob(_seed_database(tmp_path / "seed.sqlite"))
+    settings = ApplicationSettings(database=str(tmp_path / "local.sqlite"),
+                                   owner_object_id="owner", archive_dir=str(tmp_path / "archives"))
+    app = create_private_app(settings, leased_snapshot=LeasedSnapshot(blob))
+    entered, release = threading.Event(), threading.Event()
+    second_entered = threading.Event()
+
+    @app.post("/slow")
+    def slow():
+        app.state.store.connection.execute("INSERT INTO fence_probe VALUES ('first')")
+        entered.set()
+        assert release.wait(5)
+        app.state.store.connection.commit()
+        return {"ok": True}
+
+    @app.post("/second")
+    def second():
+        second_entered.set()
+        app.state.store.connection.execute("INSERT INTO fence_probe VALUES ('second')")
+        app.state.store.connection.commit()
+        return {"ok": True}
+
+    async def scenario():
+        async def receive(): return {"type": "http.request", "body": b"", "more_body": False}
+        async def send(message): pass
+        def scope(path):
+            return {"type": "http", "asgi": {"version": "3.0"}, "http_version": "1.1",
+                    "method": "POST", "scheme": "http", "path": path,
+                    "raw_path": path.encode(), "query_string": b"", "root_path": "",
+                    "headers": [], "client": ("127.0.0.1", 1), "server": ("localhost", 80)}
+        first = asyncio.create_task(app(scope("/slow"), receive, send))
+        assert await asyncio.to_thread(entered.wait, 2)
+        first.cancel()
+        second_task = asyncio.create_task(app(scope("/second"), receive, send))
+        try:
+            await asyncio.sleep(0.1)
+            assert not second_entered.is_set()
+        finally:
+            release.set()
+            outcomes = await asyncio.gather(first, second_task, return_exceptions=True)
+        assert isinstance(outcomes[0], asyncio.CancelledError)
+        assert outcomes[1] is None
+        assert app.state.store.connection.execute("SELECT value FROM fence_probe ORDER BY value").fetchall() == [
+            ("first",), ("initial",), ("second",)
+        ]
+    try:
+        asyncio.run(scenario())
+    finally:
+        app.state.store.connection.close()

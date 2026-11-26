@@ -46,7 +46,23 @@ class FencedHttpGate:
                 if self._broken:
                     raise SnapshotUnavailable("request cleanup failed")
                 await asyncio.to_thread(self._verify)
-                await self._app(scope, receive, checked_send)
+                # Cancelling an await on a sync worker does not stop its thread.
+                # Keep the handler alive and the gate held until it finishes.
+                handler = asyncio.create_task(self._app(scope, receive, checked_send))
+                cancelled = False
+                while True:
+                    try:
+                        await asyncio.shield(handler)
+                        break
+                    except asyncio.CancelledError:
+                        if handler.cancelled():
+                            # A child cancelled by something other than this
+                            # gate may have left a worker thread running.
+                            self._broken = True
+                            raise
+                        cancelled = True
+                if cancelled:
+                    raise asyncio.CancelledError
             except SnapshotUnavailable:
                 if started:
                     # Headers are already on the wire; abort rather than emit a

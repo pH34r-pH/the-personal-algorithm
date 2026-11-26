@@ -146,3 +146,58 @@ def test_cleanup_failure_fails_closed_for_later_requests():
         assert calls == ["/first"]
         assert sent[0]["status"] == 503
     asyncio.run(scenario())
+
+
+def test_cancelled_request_waits_for_running_sync_worker_before_unlock():
+    async def scenario():
+        entered, release, finished = threading.Event(), threading.Event(), threading.Event()
+        calls, cleanups = [], []
+
+        def worker():
+            entered.set()
+            assert release.wait(5)
+            finished.set()
+
+        async def app(scope, receive, send):
+            calls.append(scope["path"])
+            if scope["path"] == "/first":
+                await asyncio.to_thread(worker)
+            await send({"type": "http.response.start", "status": 200, "headers": []})
+            await send({"type": "http.response.body", "body": b"ok"})
+
+        async def send(message): pass
+        gate = FencedHttpGate(app, verify=lambda: None, cleanup=lambda: cleanups.append(finished.is_set()))
+        first = asyncio.create_task(gate({"type": "http", "path": "/first"}, None, send))
+        assert await asyncio.to_thread(entered.wait, 2)
+        first.cancel()
+        await asyncio.sleep(0.02)
+        first.cancel()
+        second = asyncio.create_task(gate({"type": "http", "path": "/second"}, None, send))
+        try:
+            await asyncio.sleep(0.05)
+            assert calls == ["/first"]
+            assert not cleanups
+        finally:
+            release.set()
+            await asyncio.gather(first, second, return_exceptions=True)
+        assert finished.is_set()
+        assert cleanups == [True, True]
+        assert first.cancelled()
+        assert calls == ["/first", "/second"]
+    asyncio.run(scenario())
+
+
+def test_independently_cancelled_handler_fails_closed():
+    async def scenario():
+        calls, sent = [], []
+        async def app(scope, receive, send):
+            calls.append(scope["path"])
+            raise asyncio.CancelledError
+        async def send(message): sent.append(message)
+        gate = FencedHttpGate(app, verify=lambda: None, cleanup=lambda: None)
+        with pytest.raises(asyncio.CancelledError):
+            await gate({"type": "http", "path": "/first"}, None, send)
+        await gate({"type": "http", "path": "/second"}, None, send)
+        assert calls == ["/first"]
+        assert sent[0]["status"] == 503
+    asyncio.run(scenario())

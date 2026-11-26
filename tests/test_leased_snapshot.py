@@ -1,12 +1,14 @@
 """Lease-fencing behavior using synthetic bytes and a fake Blob service."""
 
 import io
+import sqlite3
 import threading
 import time
 
 import pytest
 
 from personal_algorithm.leased_snapshot import LeasedSnapshot, SnapshotUnavailable
+from personal_algorithm.store import Store
 
 
 class FakeLease:
@@ -66,6 +68,10 @@ class FakeBlob:
             self.data = stream.read()
             if self.fail_after_write:
                 raise RuntimeError("response lost after publication")
+
+    def get_blob_properties(self, *, lease):
+        with self.lock:
+            self.require(lease)
 
     def expire(self):
         with self.lock:
@@ -145,3 +151,62 @@ def test_renewal_failure_poisoning_and_release():
     replacement = LeasedSnapshot(blob)
     replacement.start()
     replacement.close()
+
+
+def _seed_database(path):
+    store = Store(path)
+    store.connection.execute("CREATE TABLE fence_probe (value TEXT)")
+    store.connection.execute("INSERT INTO fence_probe VALUES ('initial')")
+    store.connection.commit()
+    store.connection.close()
+    return path.read_bytes()
+
+
+def test_fenced_store_publishes_and_restores_sqlite(tmp_path):
+    blob = FakeBlob(_seed_database(tmp_path / "seed.sqlite"))
+    store = Store(tmp_path / "first.sqlite", leased_snapshot=LeasedSnapshot(blob))
+    store.connection.execute("INSERT INTO fence_probe VALUES ('durable')")
+    store.connection.commit()
+    store.connection.close()
+    restored = Store(tmp_path / "second.sqlite", leased_snapshot=LeasedSnapshot(blob))
+    assert restored.connection.execute("SELECT value FROM fence_probe ORDER BY value").fetchall() == [
+        ("durable",), ("initial",)
+    ]
+    restored.connection.close()
+
+
+def test_failed_publication_stops_store_and_keeps_local_evidence(tmp_path):
+    blob = FakeBlob(_seed_database(tmp_path / "seed.sqlite"))
+    local = tmp_path / "local.sqlite"
+    store = Store(local, leased_snapshot=LeasedSnapshot(blob))
+    store.connection.execute("INSERT INTO fence_probe VALUES ('uncertain')")
+    blob.fail_after_write = True
+    with pytest.raises(SnapshotUnavailable, match="ambiguous"):
+        store.connection.commit()
+    with pytest.raises(SnapshotUnavailable):
+        store.connection.execute("SELECT * FROM fence_probe")
+    store.connection.close()
+    with sqlite3.connect(local) as check:
+        assert check.execute("SELECT COUNT(*) FROM fence_probe").fetchone() == (2,)
+    with pytest.raises(SnapshotUnavailable, match="recovery required"):
+        Store(local, leased_snapshot=LeasedSnapshot(blob))
+    assert local.exists()
+
+
+def test_fenced_store_rejects_corruption_and_lost_lease(tmp_path):
+    corrupt = FakeBlob(b"not a SQLite database")
+    with pytest.raises(sqlite3.DatabaseError):
+        Store(tmp_path / "corrupt.sqlite", leased_snapshot=LeasedSnapshot(corrupt))
+    assert not (tmp_path / "corrupt.sqlite").exists()
+    assert corrupt.active is None
+
+    blob = FakeBlob(_seed_database(tmp_path / "seed.sqlite"))
+    store = Store(tmp_path / "local.sqlite", leased_snapshot=LeasedSnapshot(blob))
+    cursor = store.connection.execute("SELECT * FROM fence_probe")
+    blob.expire()
+    with pytest.raises(SnapshotUnavailable):
+        cursor.fetchone()
+    with pytest.raises(SnapshotUnavailable):
+        store.connection.execute("SELECT * FROM fence_probe")
+    with pytest.raises(SnapshotUnavailable):
+        store.connection.close()

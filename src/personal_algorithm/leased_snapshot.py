@@ -89,6 +89,15 @@ class LeasedSnapshot:
             self._poison(exc)
             raise SnapshotUnavailable("snapshot download failed") from exc
 
+    def verify(self) -> None:
+        """Ask Blob Storage to validate the lease before using local state."""
+        try:
+            self._blob.get_blob_properties(lease=self._require_lease())
+            self._require_lease()
+        except Exception as exc:
+            self._poison(exc)
+            raise SnapshotUnavailable("snapshot lease verification failed") from exc
+
     def publish(self, source: Path) -> None:
         """Atomically publish a complete snapshot with server-side fencing.
 

@@ -1,6 +1,8 @@
 import sqlite3
 from datetime import UTC, datetime
 
+import pytest
+
 import personal_algorithm.store as store_module
 from personal_algorithm.models import PersonalEvent
 
@@ -87,3 +89,49 @@ def test_personal_events_are_upserted_without_becoming_candidates():
         (event.id,),
     ).fetchone()
     assert row == ("spotify", "stream", "Example Track")
+
+
+def test_restore_never_overwrites_divergent_local_database(tmp_path):
+    live = tmp_path / "live.sqlite3"
+    snapshot = tmp_path / "snapshot.sqlite3"
+    with sqlite3.connect(live) as connection:
+        connection.execute("CREATE TABLE probe (value TEXT)")
+        connection.execute("INSERT INTO probe VALUES ('local')")
+    with sqlite3.connect(snapshot) as connection:
+        connection.execute("CREATE TABLE probe (value TEXT)")
+        connection.execute("INSERT INTO probe VALUES ('snapshot')")
+
+    with pytest.raises(RuntimeError, match="recovery required"):
+        store_module.Store(live, snapshot_path=snapshot)
+    with sqlite3.connect(live) as connection:
+        assert connection.execute("SELECT value FROM probe").fetchone() == ("local",)
+    with sqlite3.connect(snapshot) as connection:
+        assert connection.execute("SELECT value FROM probe").fetchone() == ("snapshot",)
+
+
+def test_restore_accepts_logically_equal_existing_database(tmp_path):
+    live = tmp_path / "live.sqlite3"
+    snapshot = tmp_path / "snapshot.sqlite3"
+    first = store_module.Store(live, snapshot_path=snapshot)
+    first.connection.execute("CREATE TABLE probe (value TEXT)")
+    first.connection.execute("INSERT INTO probe VALUES ('kept')")
+    first.connection.commit()
+    first.connection.close()
+
+    restored = store_module.Store(live, snapshot_path=snapshot)
+    assert restored.connection.execute("SELECT value FROM probe").fetchone() == ("kept",)
+    restored.connection.close()
+
+
+def test_restore_refuses_corrupt_snapshot_without_overwriting_local(tmp_path):
+    live = tmp_path / "live.sqlite3"
+    snapshot = tmp_path / "snapshot.sqlite3"
+    with sqlite3.connect(live) as connection:
+        connection.execute("CREATE TABLE probe (value TEXT)")
+        connection.execute("INSERT INTO probe VALUES ('kept')")
+    snapshot.write_bytes(b"not a sqlite database")
+
+    with pytest.raises(sqlite3.DatabaseError):
+        store_module.Store(live, snapshot_path=snapshot)
+    with sqlite3.connect(live) as connection:
+        assert connection.execute("SELECT value FROM probe").fetchone() == ("kept",)

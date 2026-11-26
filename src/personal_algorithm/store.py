@@ -219,6 +219,13 @@ class _DurableConnection:
         with self._lock:
             self._connection.rollback()
 
+    def finish_request(self) -> None:
+        """Reject an unfinished transaction, retaining committed recovery data."""
+        with self._lock:
+            if self._connection.in_transaction:
+                self._connection.rollback()
+                raise SnapshotUnavailable("request ended with an unfinished transaction")
+
     def close(self) -> None:
         with self._lock:
             for cursor in list(self._cursors):

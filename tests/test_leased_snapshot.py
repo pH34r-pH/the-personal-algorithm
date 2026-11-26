@@ -4,10 +4,13 @@ import io
 import sqlite3
 import threading
 import time
+from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime
 
 import pytest
+from fastapi.testclient import TestClient
 
+from personal_algorithm.application import ApplicationSettings, create_private_app
 from personal_algorithm.connections import ConnectionStore
 from personal_algorithm.leased_snapshot import LeasedSnapshot, SnapshotUnavailable
 from personal_algorithm.providers import Connection, ConnectionStatus
@@ -235,3 +238,85 @@ def test_connection_listing_batches_results_and_preserves_fields(tmp_path):
     assert connections.list() == tuple(sorted(entries, key=lambda item: item.provider_id))
     assert blob.checks == 4
     store.connection.close()
+
+
+def test_fenced_application_auth_write_recovery_and_unfinished_request(tmp_path):
+    blob = FakeBlob(_seed_database(tmp_path / "seed.sqlite"))
+    settings = ApplicationSettings(database=str(tmp_path / "first.sqlite"),
+                                   owner_object_id="owner", archive_dir=str(tmp_path / "archives"))
+    app = create_private_app(settings, leased_snapshot=LeasedSnapshot(blob))
+
+    @app.post("/synthetic-write")
+    def write():
+        app.state.store.connection.execute("INSERT INTO fence_probe VALUES ('durable')")
+        app.state.store.connection.commit()
+        return {"ok": True}
+
+    @app.post("/synthetic-uncommitted")
+    def unfinished():
+        app.state.store.connection.execute("INSERT INTO fence_probe VALUES ('not-durable')")
+        return {"ok": True}
+
+    with TestClient(app) as client:
+        assert client.get("/health").status_code == 200
+        assert client.get("/connections").status_code == 401
+        assert client.get("/connections", headers={"x-ms-client-principal-id": "owner"}).status_code == 200
+        assert client.post("/synthetic-write").status_code == 200
+        assert client.post("/synthetic-uncommitted").status_code == 503
+        assert app.state.store.connection.execute("SELECT value FROM fence_probe ORDER BY value").fetchall() == [
+            ("durable",), ("initial",)
+        ]
+    assert blob.active is None
+
+    second = ApplicationSettings(database=str(tmp_path / "second.sqlite"),
+                                 owner_object_id="owner", archive_dir=str(tmp_path / "archives"))
+    restored = create_private_app(second, leased_snapshot=LeasedSnapshot(blob))
+    with TestClient(restored) as client:
+        assert client.get("/health").status_code == 200
+        assert restored.state.store.connection.execute("SELECT value FROM fence_probe ORDER BY value").fetchall() == [
+            ("durable",), ("initial",)
+        ]
+
+
+def test_fenced_application_fails_closed_after_lease_loss(tmp_path):
+    blob = FakeBlob(_seed_database(tmp_path / "seed.sqlite"))
+    settings = ApplicationSettings(database=str(tmp_path / "local.sqlite"),
+                                   owner_object_id="owner", archive_dir=str(tmp_path / "archives"))
+    app = create_private_app(settings, leased_snapshot=LeasedSnapshot(blob))
+    # Shutdown reports the lost lease.
+    with pytest.raises(SnapshotUnavailable), TestClient(app) as client:
+        blob.expire()
+        assert client.get("/health").status_code == 503
+
+
+def test_fenced_application_serializes_transactions_across_requests(tmp_path):
+    blob = FakeBlob(_seed_database(tmp_path / "seed.sqlite"))
+    settings = ApplicationSettings(database=str(tmp_path / "local.sqlite"),
+                                   owner_object_id="owner", archive_dir=str(tmp_path / "archives"))
+    app = create_private_app(settings, leased_snapshot=LeasedSnapshot(blob))
+    entered, release = threading.Event(), threading.Event()
+
+    @app.post("/synthetic-slow-write")
+    def slow_write():
+        app.state.store.connection.execute("INSERT INTO fence_probe VALUES ('pending')")
+        entered.set()
+        assert release.wait(5)
+        app.state.store.connection.commit()
+        return {"ok": True}
+
+    @app.get("/synthetic-read")
+    def read():
+        rows = app.state.store.connection.execute("SELECT value FROM fence_probe ORDER BY value").fetchall()
+        return {"values": [row[0] for row in rows]}
+
+    with TestClient(app) as client, ThreadPoolExecutor(max_workers=2) as executor:
+        first = executor.submit(client.post, "/synthetic-slow-write")
+        assert entered.wait(2)
+        second = executor.submit(client.get, "/synthetic-read")
+        try:
+            time.sleep(0.1)
+            assert not second.done()
+        finally:
+            release.set()
+        assert first.result(timeout=5).status_code == 200
+        assert second.result(timeout=5).json() == {"values": ["initial", "pending"]}

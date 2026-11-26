@@ -1,7 +1,7 @@
 """Prototype serialization and lease checks around complete HTTP requests.
 
-This gate is not enabled in the hosted application. Background work and startup
-must also be fenced before it can serve as a complete single-writer boundary.
+This gate is enabled only when a leased snapshot is explicitly injected.
+Background work and startup still require production qualification.
 """
 
 from __future__ import annotations
@@ -16,10 +16,12 @@ from .leased_snapshot import SnapshotUnavailable
 class FencedHttpGate:
     """Serialize HTTP requests, check the lease, and roll back unfinished work."""
 
-    def __init__(self, app: Any, *, verify: Callable[[], None], cleanup: Callable[[], None]):
+    def __init__(self, app: Any, *, verify: Callable[[], None], cleanup: Callable[[], None],
+                 check_complete: Callable[[], None] | None = None):
         self._app = app
         self._verify = verify
         self._cleanup = cleanup
+        self._check_complete = check_complete
         self._lock = asyncio.Lock()
         self._broken = False
 
@@ -32,6 +34,8 @@ class FencedHttpGate:
 
             async def checked_send(message):
                 nonlocal started
+                if message["type"] == "http.response.start" and self._check_complete is not None:
+                    await asyncio.to_thread(self._check_complete)
                 if message["type"] in {"http.response.start", "http.response.body"}:
                     await asyncio.to_thread(self._verify)
                 await send(message)

@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import asyncio
 import os
+from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -16,9 +18,11 @@ from .bootstrap import BootstrapCoordinator
 from .connections import ConnectionStore
 from .connections_api import create_connections_router
 from .delegated_auth import SPECS, DelegatedAuthorization, DelegatedProvider
+from .fenced_http import FencedHttpGate
 from .github_auth import GitHubAuthorization
 from .github_provider import GitHubProvider
 from .instance_auth import InstanceAuth
+from .leased_snapshot import LeasedSnapshot
 from .oauth_state import DurableAuthorizationStateStore
 from .private_api import protect
 from .provider_registry import ProviderRegistry
@@ -95,10 +99,21 @@ def _build_github(settings, store, credentials, github_http, oauth_http):
     return github, registry, github_auth
 
 
-def _build_services(settings: ApplicationSettings, credentials, github_http, oauth_http):
+def _build_services(settings: ApplicationSettings, credentials, github_http, oauth_http,
+                    leased_snapshot: LeasedSnapshot | None = None):
     database_path = Path(settings.database)
     database_path.parent.mkdir(parents=True, exist_ok=True)
-    store = Store(database_path, snapshot_path=settings.database_snapshot)
+    store = Store(database_path, snapshot_path=settings.database_snapshot,
+                  leased_snapshot=leased_snapshot)
+    try:
+        return _build_services_for_store(settings, store, credentials, github_http, oauth_http)
+    except Exception:
+        if leased_snapshot is not None:
+            store.connection.close()
+        raise
+
+
+def _build_services_for_store(settings, store, credentials, github_http, oauth_http):
     connection_store = ConnectionStore(store)
     bootstrap = BootstrapCoordinator(store)
     archive_inbox = ArchiveInbox(
@@ -207,13 +222,32 @@ def create_private_app(
     github_http=None,
     oauth_http=None,
     youtube_http=None,
+    leased_snapshot: LeasedSnapshot | None = None,
 ) -> FastAPI:
-    services = _build_services(settings, credentials, github_http, oauth_http)
+    services = _build_services(settings, credentials, github_http, oauth_http, leased_snapshot)
+
+    @asynccontextmanager
+    async def lifespan(_app):
+        try:
+            yield
+        finally:
+            if leased_snapshot is not None:
+                await asyncio.to_thread(services[0].connection.close)
+
     app = FastAPI(
         title="The Personal Algorithm", version="0.1.0",
         docs_url=None, redoc_url=None, openapi_url=None,
+        lifespan=lifespan,
     )
+    app.state.store = services[0]
     _include_private_routers(app, settings, services, youtube_http)
+    if leased_snapshot is not None:
+        app.add_middleware(
+            FencedHttpGate,
+            verify=leased_snapshot.verify,
+            cleanup=services[0].connection.finish_request,
+            check_complete=services[0].connection.finish_request,
+        )
 
     @app.get("/", response_class=HTMLResponse)
     def landing() -> str:

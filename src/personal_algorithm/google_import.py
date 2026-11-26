@@ -25,6 +25,7 @@ if TYPE_CHECKING:
 
 MAX_MEMBER_BYTES = 128 * 1024 * 1024
 MAX_TOTAL_BYTES = 512 * 1024 * 1024
+TEXT_CHUNK_SIZE = 65536
 
 
 @dataclass(frozen=True, slots=True)
@@ -171,18 +172,23 @@ def _event(row: object, archive_sha: str, member: str, index: int) -> PersonalEv
     )
 
 
-def _read_rows(stream, filename: str):
+def _iter_rows(stream, filename: str):
     if filename.lower().endswith(".csv"):
         reader = csv.DictReader(io.TextIOWrapper(stream, encoding="utf-8-sig", newline=""))
         if not {"Channel Id", "Channel Url", "Channel Title"} <= set(reader.fieldnames or []):
             raise ValueError("invalid subscription CSV header")
-        return list(reader)
-    if filename.lower().endswith(".html"):
+        yield from reader
+    elif filename.lower().endswith(".html"):
         parser = _ActivityHTML()
-        parser.feed(stream.read().decode("utf-8-sig"))
+        text = io.TextIOWrapper(stream, encoding="utf-8-sig", newline="")
+        while chunk := text.read(TEXT_CHUNK_SIZE):
+            parser.feed(chunk)
+            yield from parser.rows
+            parser.rows.clear()
         parser.close()
-        return parser.rows
-    return json.load(stream)
+        yield from parser.rows
+    else:
+        yield from iter_json_array(stream)
 
 
 def _selected_rows(archive, member, total):
@@ -191,23 +197,17 @@ def _selected_rows(archive, member, total):
     total += member.file_size
     if member.file_size > MAX_MEMBER_BYTES or total > MAX_TOTAL_BYTES:
         raise ValueError("selected Google activity data exceeds safety limits")
-    if member.filename.lower().endswith(".json"):
-        # Validate the whole member before writing any of its rows. Reopening
-        # the archive member preserves that contract without retaining all rows.
-        with archive.open(member) as stream:
-            for _ in iter_json_array(stream):
-                pass
-
-        def validated_rows():
-            with archive.open(member) as stream:
-                yield from iter_json_array(stream)
-
-        return validated_rows(), total
+    # Validate the whole member before writing any of its rows. Reopening the
+    # archive member preserves that contract without retaining all rows.
     with archive.open(member) as stream:
-        rows = _read_rows(stream, member.filename)
-    if not isinstance(rows, list):
-        raise TypeError("activity JSON must be an array")
-    return rows, total
+        for _ in _iter_rows(stream, member.filename):
+            pass
+
+    def validated_rows():
+        with archive.open(member) as stream:
+            yield from _iter_rows(stream, member.filename)
+
+    return validated_rows(), total
 
 
 def import_google_activity(inbox: ArchiveInbox, store: Store, record: ArchiveRecord):

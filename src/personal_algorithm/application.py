@@ -51,6 +51,8 @@ class ApplicationSettings:
     blob_identity_client_id: str = ""
     archive_dir: str = "data/archives"
     archive_max_bytes: int = 50 * 1024 * 1024 * 1024
+    body_idle_timeout: float = 120.0
+    body_max_duration: float | None = None
 
     @classmethod
     def from_env(cls) -> ApplicationSettings:
@@ -61,6 +63,7 @@ class ApplicationSettings:
         missing = [name for name, value in required.items() if not value]
         if missing:
             raise RuntimeError(f"missing application settings: {', '.join(missing)}")
+        raw_max_duration = os.getenv("TPA_BODY_MAX_DURATION", "")
         return cls(
             **required,
             key_vault_url=os.getenv("TPA_KEY_VAULT_URL", ""),
@@ -79,6 +82,8 @@ class ApplicationSettings:
             archive_max_bytes=int(
                 os.getenv("TPA_ARCHIVE_MAX_BYTES", str(50 * 1024 * 1024 * 1024))
             ),
+            body_idle_timeout=float(os.getenv("TPA_BODY_IDLE_TIMEOUT", "120.0")),
+            body_max_duration=float(raw_max_duration) if raw_max_duration else None,
         )
 
 
@@ -229,10 +234,15 @@ def create_private_app(
     oauth_http=None,
     youtube_http=None,
     leased_snapshot: LeasedSnapshot | None = None,
-    body_idle_timeout: float = 120.0,
+    body_idle_timeout: float | None = None,
 ) -> FastAPI:
-    if leased_snapshot is not None and (not math.isfinite(body_idle_timeout) or body_idle_timeout <= 0):
-        raise ValueError("body idle timeout must be positive and finite")
+    idle_timeout = settings.body_idle_timeout if body_idle_timeout is None else body_idle_timeout
+    max_duration = settings.body_max_duration
+    if leased_snapshot is not None:
+        if not math.isfinite(idle_timeout) or idle_timeout <= 0:
+            raise ValueError("body idle timeout must be positive and finite")
+        if max_duration is not None and (not math.isfinite(max_duration) or max_duration <= 0):
+            raise ValueError("body max duration must be positive and finite")
     services = _build_services(settings, credentials, github_http, oauth_http, leased_snapshot)
 
     @asynccontextmanager
@@ -256,7 +266,8 @@ def create_private_app(
             verify=services[0].connection.check_available,
             cleanup=services[0].connection.finish_request,
             check_complete=services[0].connection.finish_request,
-            body_idle_timeout=body_idle_timeout,
+            body_idle_timeout=idle_timeout,
+            body_max_duration=max_duration,
         )
 
     @app.get("/", response_class=HTMLResponse)

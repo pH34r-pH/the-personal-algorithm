@@ -17,13 +17,25 @@ from .leased_snapshot import SnapshotUnavailable
 
 
 class _DisconnectableReceive:
-    def __init__(self, receive, idle_timeout: float):
+    def __init__(self, receive, idle_timeout: float, max_duration: float | None = None):
         self._receive = receive
         self.disconnected = asyncio.Event()
         self.timed_out = False
         self._idle_timeout = idle_timeout
         self._remaining = idle_timeout
+        self._max_duration = max_duration
+        self._deadline: float | None = None
         self._body_complete = False
+
+    def _next_timeout(self, now: float) -> float | None:
+        if self._body_complete:
+            return None
+        timeout = max(0.0, self._remaining)
+        if self._max_duration is not None:
+            if self._deadline is None:
+                self._deadline = now + self._max_duration
+            timeout = min(timeout, max(0.0, self._deadline - now))
+        return timeout
 
     async def __call__(self):
         if self.disconnected.is_set():
@@ -33,9 +45,9 @@ class _DisconnectableReceive:
         loop = asyncio.get_running_loop()
         started = loop.time()
         try:
-            timeout = None if self._body_complete else max(0.0, self._remaining)
             done, _ = await asyncio.wait(
-                (inbound, stop), timeout=timeout, return_when=asyncio.FIRST_COMPLETED
+                (inbound, stop), timeout=self._next_timeout(started),
+                return_when=asyncio.FIRST_COMPLETED,
             )
             if stop in done:
                 return {"type": "http.disconnect"}
@@ -69,14 +81,20 @@ class FencedHttpGate:
 
     def __init__(self, app: Any, *, verify: Callable[[], None], cleanup: Callable[[], None],
                  check_complete: Callable[[], None] | None = None,
-                 body_idle_timeout: float = 120.0):
+                 body_idle_timeout: float = 120.0,
+                 body_max_duration: float | None = None):
         if not math.isfinite(body_idle_timeout) or body_idle_timeout <= 0:
             raise ValueError("body idle timeout must be positive")
+        if body_max_duration is not None and (
+            not math.isfinite(body_max_duration) or body_max_duration <= 0
+        ):
+            raise ValueError("body max duration must be positive")
         self._app = app
         self._verify = verify
         self._cleanup = cleanup
         self._check_complete = check_complete
         self._body_idle_timeout = body_idle_timeout
+        self._body_max_duration = body_max_duration
         self._lock = asyncio.Lock()
         self._broken = False
 
@@ -135,7 +153,9 @@ class FencedHttpGate:
             return
         async with self._lock:
             started = False
-            wrapped_receive = _DisconnectableReceive(receive, self._body_idle_timeout)
+            wrapped_receive = _DisconnectableReceive(
+                receive, self._body_idle_timeout, self._body_max_duration
+            )
 
             async def checked_send(message):
                 nonlocal started

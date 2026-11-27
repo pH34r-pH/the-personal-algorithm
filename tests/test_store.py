@@ -93,6 +93,105 @@ def test_personal_events_are_upserted_without_becoming_candidates():
     assert row == ("spotify", "stream", "Example Track")
 
 
+def test_restore_never_overwrites_divergent_local_database(tmp_path):
+    live = tmp_path / "live.sqlite3"
+    snapshot = tmp_path / "snapshot.sqlite3"
+    with sqlite3.connect(live) as connection:
+        connection.execute("CREATE TABLE probe (value TEXT)")
+        connection.execute("INSERT INTO probe VALUES ('local')")
+    with sqlite3.connect(snapshot) as connection:
+        connection.execute("CREATE TABLE probe (value TEXT)")
+        connection.execute("INSERT INTO probe VALUES ('snapshot')")
+
+    with pytest.raises(RuntimeError, match="recovery required"):
+        store_module.Store(live, snapshot_path=snapshot)
+    with sqlite3.connect(live) as connection:
+        assert connection.execute("SELECT value FROM probe").fetchone() == ("local",)
+    with sqlite3.connect(snapshot) as connection:
+        assert connection.execute("SELECT value FROM probe").fetchone() == ("snapshot",)
+
+
+def test_restore_accepts_logically_equal_existing_database(tmp_path):
+    live = tmp_path / "live.sqlite3"
+    snapshot = tmp_path / "snapshot.sqlite3"
+    first = store_module.Store(live, snapshot_path=snapshot)
+    first.connection.execute("CREATE TABLE probe (value TEXT)")
+    first.connection.execute("INSERT INTO probe VALUES ('kept')")
+    first.connection.commit()
+    first.connection.close()
+
+    restored = store_module.Store(live, snapshot_path=snapshot)
+    assert restored.connection.execute("SELECT value FROM probe").fetchone() == ("kept",)
+    restored.connection.close()
+
+
+def test_restore_refuses_corrupt_snapshot_without_overwriting_local(tmp_path):
+    live = tmp_path / "live.sqlite3"
+    snapshot = tmp_path / "snapshot.sqlite3"
+    with sqlite3.connect(live) as connection:
+        connection.execute("CREATE TABLE probe (value TEXT)")
+        connection.execute("INSERT INTO probe VALUES ('kept')")
+    snapshot.write_bytes(b"not a sqlite database")
+
+    with pytest.raises(sqlite3.DatabaseError):
+        store_module.Store(live, snapshot_path=snapshot)
+    with sqlite3.connect(live) as connection:
+        assert connection.execute("SELECT value FROM probe").fetchone() == ("kept",)
+
+
+def test_interrupted_restore_does_not_publish_partial_database(tmp_path, monkeypatch):
+    live = tmp_path / "live.sqlite3"
+    snapshot = tmp_path / "snapshot.sqlite3"
+    snapshot.write_bytes(b"original fixture input")
+
+    def interrupted_copy(source, destination):
+        destination.write(source.read(4))
+        raise OSError("fixture copy interrupted")
+
+    monkeypatch.setattr(store_module.shutil, "copyfileobj", interrupted_copy)
+    with pytest.raises(OSError, match="copy interrupted"):
+        store_module.Store(live, snapshot_path=snapshot)
+    assert not live.exists()
+    assert snapshot.read_bytes() == b"original fixture input"
+    assert not list(tmp_path.glob(".live.sqlite3.*.restore"))
+
+
+def test_corrupt_snapshot_cannot_seed_a_missing_local_database(tmp_path):
+    live = tmp_path / "live.sqlite3"
+    snapshot = tmp_path / "snapshot.sqlite3"
+    snapshot.write_bytes(b"not a SQLite database")
+    with pytest.raises(sqlite3.DatabaseError):
+        store_module.Store(live, snapshot_path=snapshot)
+    assert not live.exists()
+    assert not list(tmp_path.glob(".live.sqlite3.*.restore"))
+
+
+def test_restore_preserves_a_local_database_created_during_staging(tmp_path, monkeypatch):
+    live = tmp_path / "live.sqlite3"
+    snapshot = tmp_path / "snapshot.sqlite3"
+    with sqlite3.connect(snapshot) as connection:
+        connection.execute("CREATE TABLE probe (value TEXT)")
+        connection.execute("INSERT INTO probe VALUES ('snapshot')")
+    link = store_module.os.link
+
+    def publish_during_restore(staged, target):
+        connection = sqlite3.connect(live)
+        try:
+            connection.execute("CREATE TABLE probe (value TEXT)")
+            connection.execute("INSERT INTO probe VALUES ('concurrent local')")
+            connection.commit()
+        finally:
+            connection.close()
+        link(staged, target)
+
+    monkeypatch.setattr(store_module.os, "link", publish_during_restore)
+    with pytest.raises(RuntimeError, match="recovery required"):
+        store_module.Store(live, snapshot_path=snapshot)
+    with sqlite3.connect(live) as connection:
+        assert connection.execute("SELECT value FROM probe").fetchone() == ("concurrent local",)
+    assert not list(tmp_path.glob(".live.sqlite3.*.restore"))
+
+
 def _staging_database(path, rows):
     connection = sqlite3.connect(path)
     try:

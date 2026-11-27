@@ -218,3 +218,45 @@ def test_idle_budget_resets_on_data_and_excludes_processing_time():
             await asyncio.sleep(0.12)  # Processing time isn't client idle time.
         assert not reader.timed_out
     asyncio.run(scenario())
+
+
+def test_gate_rejects_invalid_body_max_duration():
+    async def app(scope, receive, send):
+        pass
+
+    for bad in (0.0, -5.0, float("inf"), float("nan")):
+        with pytest.raises(ValueError, match="body max duration"):
+            FencedHttpGate(app, verify=lambda: None, cleanup=lambda: None, body_max_duration=bad)
+
+
+def test_gate_times_out_continuously_slow_body_when_max_duration_exceeded():
+    async def scenario():
+        sent = []
+        cleanups = []
+
+        async def slow_receive():
+            await asyncio.sleep(0.03)
+            return {"type": "http.request", "body": b"x", "more_body": True}
+
+        async def app(scope, receive, send):
+            while True:
+                msg = await receive()
+                if msg["type"] == "http.disconnect":
+                    return
+
+        async def send(message):
+            sent.append(message)
+
+        gate = FencedHttpGate(
+            app,
+            verify=lambda: None,
+            cleanup=lambda: cleanups.append(True),
+            body_idle_timeout=1.0,
+            body_max_duration=0.05,
+        )
+        await gate({"type": "http", "path": "/upload", "method": "POST"}, slow_receive, send)
+        assert sent[0]["status"] == 408
+        assert sent[1]["body"] == b"Request body timed out"
+        assert cleanups == [True]
+
+    asyncio.run(scenario())

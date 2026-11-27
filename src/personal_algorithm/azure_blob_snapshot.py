@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+from collections.abc import Callable
 from urllib.parse import urlsplit
 from uuid import UUID
 
@@ -35,17 +36,22 @@ def _parse_target(url: str, identity_client_id: str) -> tuple[str, str, str, str
     return f"https://{host}", segments[1], segments[2], identity
 
 
-def configured_blob_snapshot(url: str, identity_client_id: str) -> LeasedSnapshot:
-    """Use one existing Blob and an explicit user-assigned identity, without SAS."""
+def configured_blob_client(
+    url: str, identity_client_id: str, *, version_id: str | None = None,
+) -> tuple[BlobClient, Callable[[], None]]:
+    """Build an explicit managed-identity BlobClient with fail-closed timeouts."""
     account_url, container, name, client_id = _parse_target(url, identity_client_id)
     # Fail closed on the first network error. These are per-socket timeouts,
     # not a guarantee of total startup or multi-block upload duration.
     options = {"connection_timeout": 5, "read_timeout": 10, "retry_total": 0,
                "retry_connect": 0, "retry_read": 0, "retry_status": 0}
     credential = ManagedIdentityCredential(client_id=client_id, **options)
+    blob_kwargs = {"account_url": account_url, "container_name": container, "blob_name": name,
+                   "credential": credential, **options}
+    if version_id is not None:
+        blob_kwargs["version_id"] = version_id
     try:
-        blob = BlobClient(account_url=account_url, container_name=container, blob_name=name,
-                          credential=credential, **options)
+        blob = BlobClient(**blob_kwargs)
     except Exception:
         credential.close()
         raise
@@ -56,4 +62,10 @@ def configured_blob_snapshot(url: str, identity_client_id: str) -> LeasedSnapsho
         finally:
             credential.close()
 
+    return blob, close_clients
+
+
+def configured_blob_snapshot(url: str, identity_client_id: str) -> LeasedSnapshot:
+    """Use one existing Blob and an explicit user-assigned identity, without SAS."""
+    blob, close_clients = configured_blob_client(url, identity_client_id)
     return LeasedSnapshot(blob, on_close=close_clients)

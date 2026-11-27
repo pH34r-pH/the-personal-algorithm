@@ -1,8 +1,8 @@
 """Exclusive, lease-fenced access to an existing Azure Blob snapshot.
 
-This primitive is not wired into the hosted application yet.  In particular,
-callers must stop serving local state after any failure and handle ambiguous
-publication results before this can be used for production persistence.
+Callers must stop serving local state after any failure and handle ambiguous
+publication results. Live production cutover remains an explicit deployment
+boundary outside this module.
 """
 
 from __future__ import annotations

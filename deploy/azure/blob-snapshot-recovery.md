@@ -47,3 +47,18 @@ container failure. Before migration, define and test independently protected
 backups, retention and recovery, account/container deletion controls, the exact
 runtime and operator roles, and their cost. The current experiments do not
 establish those controls or a safe automatic rollback.
+
+## Operator CLI and request-body bounds
+
+`python -m personal_algorithm.snapshot_cli` exposes four explicit, non-destructive
+subcommands that emit JSON receipts without printing database contents:
+
+- `backup-locked` — captures a writer-reserved validated SQLite copy into a new `--output` file.
+- `seed` — uploads a previously frozen SQLite file to an absent Blob (`overwrite=False`) and verifies readback.
+- `verify-seed` — compares a frozen local file against an existing Blob without mutating either side.
+- `stage-version` — downloads and validates one explicit `--version-id` into a new `--output` file.
+
+When the opt-in fenced Blob mode is enabled (`TPA_BLOB_SNAPSHOT_URL` and
+`TPA_BLOB_IDENTITY_CLIENT_ID`), `TPA_BODY_IDLE_TIMEOUT` (default `120` seconds)
+and optional `TPA_BODY_MAX_DURATION` bound request-body stalls and continuously
+slow uploads before response headers.

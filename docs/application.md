@@ -24,6 +24,22 @@ window between a local commit and snapshot publication. A failed snapshot can
 leave the local database newer than the persistent copy; do not infer safe
 scale-to-zero or recovery solely from this staging behavior.
 
+The recovery candidate checks SQLite integrity before restoring a snapshot.
+When a local database already exists, startup compares both databases through
+read-only connections. A difference stops startup and preserves both copies.
+For a missing local database, the candidate verifies a temporary local copy
+before publishing it with an atomic link in the same directory. A local database
+created during staging takes precedence and must match before startup continues.
+
+If startup requests recovery, stop writers and preserve both copies and their
+sidecars before inspection. Record the deployed revision and recovery reason.
+Check integrity and compare read-only copies in an isolated environment, then
+have the operator choose the authoritative copy. Keep the originals available
+through the restore and rollback exercise. The hosting work in
+[issue #94](https://github.com/pH34r-pH/the-personal-algorithm/issues/94) owns
+cross-revision fencing, remote durability, Azure Files semantics, and recovery
+timing before a configuration change.
+
 GitHub additionally requires all of:
 
 ```text

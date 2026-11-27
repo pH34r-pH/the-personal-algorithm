@@ -285,3 +285,41 @@ def test_raw_utf8_bom_preserves_previous_rejection(tmp_path):
         import_spotify_history(inbox, store, inbox.get(sha))
     assert store.count_personal_events() == 0
     assert inbox.get(sha).status == "failed"
+
+
+def test_spotify_import_rejects_oversized_unsupported_json(tmp_path, monkeypatch):
+    monkeypatch.setattr(spotify_import, "MAX_UNSUPPORTED_JSON_BYTES", 64)
+    payload = io.BytesIO()
+    with zipfile.ZipFile(payload, "w") as archive:
+        archive.writestr("Spotify Extended Streaming History/endsong_0.json", "[]")
+        archive.writestr("Spotify Extended Streaming History/Identity.json", json.dumps({"bio": "x" * 200}))
+    client, store, inbox = _client(tmp_path)
+    uploaded = client.post(
+        "/archives/upload",
+        content=payload.getvalue(),
+        headers={"x-archive-filename": "spotify.zip"},
+    )
+    assert uploaded.status_code == 201
+    sha = uploaded.json()["sha256"]
+    response = client.post(f"/archives/{sha}/import")
+    assert response.status_code == 422
+    assert "exceeds size limit" in response.json()["detail"]
+    with pytest.raises(ValueError, match="exceeds size limit"):
+        import_spotify_history(inbox, store, inbox.get(sha))
+
+
+def test_spotify_import_still_rejects_malformed_unsupported_json(tmp_path):
+    payload = io.BytesIO()
+    with zipfile.ZipFile(payload, "w") as archive:
+        archive.writestr("Spotify Extended Streaming History/endsong_0.json", "[]")
+        archive.writestr("Spotify Extended Streaming History/Identity.json", "{broken")
+    client, store, inbox = _client(tmp_path)
+    uploaded = client.post(
+        "/archives/upload",
+        content=payload.getvalue(),
+        headers={"x-archive-filename": "spotify.zip"},
+    )
+    assert uploaded.status_code == 201
+    sha = uploaded.json()["sha256"]
+    with pytest.raises(json.JSONDecodeError):
+        import_spotify_history(inbox, store, inbox.get(sha))

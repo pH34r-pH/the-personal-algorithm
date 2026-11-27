@@ -69,7 +69,8 @@ class RankingRun:
     context_sha256: str | None = None
 
 
-def _candidate_snapshot(candidate: Candidate) -> RankingInput:
+def candidate_snapshot(candidate: Candidate) -> RankingInput:
+    """Freeze the exact candidate content used by ranking and replay."""
     value = asdict(candidate)
     value["discovered_at"] = _utc(candidate.discovered_at).isoformat()
     value["published_at"] = _utc(candidate.published_at).isoformat() if candidate.published_at else None
@@ -122,7 +123,7 @@ def create_ranking_run(candidates: Iterable[Candidate], policy: Policy, *, now: 
     evaluated_at = _utc(now if now is not None else datetime.now(UTC))
     resolved = policy_from_dict(asdict(policy))
     policy_snapshot = RankingInput.freeze("policy", asdict(resolved))
-    members = _evaluate((_candidate_snapshot(candidate) for candidate in candidates), policy_snapshot, evaluated_at)
+    members = _evaluate((candidate_snapshot(candidate) for candidate in candidates), policy_snapshot, evaluated_at)
     return RankingRun(uuid4().hex, evaluated_at, ReferenceRanker.name, policy_snapshot, members)
 
 

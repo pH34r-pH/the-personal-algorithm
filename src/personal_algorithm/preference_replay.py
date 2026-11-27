@@ -15,7 +15,14 @@ from pathlib import Path
 from typing import Any
 
 from .models import Candidate, InteractionKind, Policy, finite_number_map
-from .ranking_runs import RankingRun, create_ranking_run, ranking_run_to_dict
+from .ranking_runs import (
+    RankingInput,
+    RankingRun,
+    candidate_snapshot,
+    create_ranking_run,
+    ranking_run_to_dict,
+)
+from .replay_source_use import ReplaySourceInput, verify_replay_source_use
 from .serialization import candidate_from_dict, interaction_from_dict, policy_from_dict
 
 REDUCER = "explicit-topic-feedback-v1"
@@ -49,14 +56,17 @@ def _unique_fields(pairs: list[tuple[str, Any]]) -> dict:
     return result
 
 
-def _read_pinned(path: Path, expected: str) -> dict:
-    raw = path.read_bytes()
+def _pinned_object(raw: bytes, expected: str) -> dict:
     if _digest(raw) != expected:
-        raise ValueError("Replay input or checkpoint SHA-256 mismatch")
+        raise ValueError("Pinned replay file SHA-256 mismatch")
     document = json.loads(raw, object_pairs_hook=_unique_fields)
     if not isinstance(document, dict):
         raise TypeError("Expected a replay JSON object")
     return document
+
+
+def _read_pinned(path: Path, expected: str) -> dict:
+    return _pinned_object(path.read_bytes(), expected)
 
 
 def _interaction(row: Any, policy_sha: str, candidate_ids: set[str], when: datetime) -> dict:
@@ -80,13 +90,12 @@ def _interaction(row: Any, policy_sha: str, candidate_ids: set[str], when: datet
     return {**value, "occurred_at": occurred.isoformat()}
 
 
-def _ordered_events(rows: list, baseline: RankingRun) -> tuple[dict, ...]:
+def _ordered_events(rows: list, policy_sha: str, candidate_ids: set[str], when: datetime) -> tuple[dict, ...]:
     if not isinstance(rows, list):
         raise TypeError("Expected an interaction list")
-    candidates = {member.ranked.candidate.id for member in baseline.members}
     by_id: dict[str, dict] = {}
     for row in rows:
-        event = _interaction(row, baseline.policy.sha256, candidates, baseline.evaluated_at)
+        event = _interaction(row, policy_sha, candidate_ids, when)
         existing = by_id.setdefault(event["event_id"], event)
         if event != existing:
             raise ValueError("Conflicting reuse of a replay event ID")
@@ -103,31 +112,54 @@ class _FrozenReplay:
     events: tuple[dict, ...]
     affinity_step: float
     input_sha256: str
+    schema_version: int
+    source_use_sha256: str | None
 
 
-def _prepare_replay(document: dict) -> _FrozenReplay:
-    data = _object(document, INPUT_FIELDS, "frozen replay input")
-    if type(data["schema_version"]) is not int or data["schema_version"] != 1:
+def _prepare_replay(document: dict, source_use: bytes | None, source_use_sha256: str | None) -> _FrozenReplay:
+    version = document.get("schema_version") if isinstance(document, dict) else None
+    if type(version) is not int or version not in (1, 2):
         raise ValueError("Unsupported frozen replay input version")
+    source_field = {"source_use_sha256"} if version == 2 else set()
+    data = _object(document, INPUT_FIELDS | source_field, "frozen replay input")
     value = data["evaluated_at"]
     if not isinstance(value, str) or (when := datetime.fromisoformat(value)).utcoffset() is None:
         raise ValueError("Frozen evaluation time must include a timezone")
+    when = when.astimezone(UTC)
     policy = policy_from_dict(data["starting_policy"])
+    policy_sha = RankingInput.freeze("policy", asdict(policy)).sha256
     if not isinstance(data["candidates"], list):
         raise TypeError("Expected a frozen candidate list")
-    candidates = tuple(map(candidate_from_dict, data["candidates"]))
-    baseline = create_ranking_run(candidates, policy, now=when)
-    events = _ordered_events(data["interactions"], baseline)
+    snapshots = tuple(candidate_snapshot(candidate_from_dict(row)) for row in data["candidates"])
+    candidates = tuple(candidate_from_dict(snapshot.load("candidate")) for snapshot in snapshots)
+    events = _ordered_events(data["interactions"], policy_sha, {candidate.id for candidate in candidates}, when)
     step = finite_number_map({"step": data["affinity_step"]}, "affinity_step")["step"]
     if step <= 0:
         raise ValueError("Affinity step must be positive")
+    binding = {}
+    if version == 2:
+        if source_use is None or source_use_sha256 is None or data["source_use_sha256"] != source_use_sha256:
+            raise ValueError("Governed replay requires the independently reviewed source-use pin")
+        reviewed = _pinned_object(source_use, source_use_sha256)
+        members = {
+            ReplaySourceInput("candidate", candidate.source, candidate.source_id, snapshot.sha256)
+            for candidate, snapshot in zip(candidates, snapshots, strict=True)
+        }
+        members.update(ReplaySourceInput("interaction", event["origin"], event["event_id"], _digest(_json(event)))
+                       for event in events)
+        verify_replay_source_use(reviewed, members, when=when)
+        binding["source_use_sha256"] = source_use_sha256
+    elif source_use is not None or source_use_sha256 is not None:
+        raise ValueError("Source-use verification requires the governed replay format")
+    baseline = create_ranking_run(candidates, policy, now=when)
     identity = _digest(_json({
-        "reducer": REDUCER, "evaluated_at": baseline.evaluated_at.isoformat(),
-        "starting_policy_sha256": baseline.policy.sha256,
-        "candidates": sorted(member.snapshot.sha256 for member in baseline.members),
+        "reducer": REDUCER, "evaluated_at": when.isoformat(),
+        "starting_policy_sha256": policy_sha,
+        "candidates": sorted(snapshot.sha256 for snapshot in snapshots),
         "interactions": events, "affinity_step": step,
+        **binding,
     }))
-    return _FrozenReplay(policy, baseline, candidates, events, step, identity)
+    return _FrozenReplay(policy, baseline, candidates, events, step, identity, version, source_use_sha256)
 
 
 def _apply(replay: _FrozenReplay, start: int, end: int, prior: dict) -> dict:
@@ -146,7 +178,7 @@ def _resume(replay: _FrozenReplay, checkpoint: dict | None) -> tuple[int, dict]:
         return 0, {}
     data = _object(checkpoint, CHECKPOINT_FIELDS, "checkpoint")
     position = data["processed"]
-    if (type(data["schema_version"]) is not int or data["schema_version"] != 1
+    if (type(data["schema_version"]) is not int or data["schema_version"] != replay.schema_version
             or data["reducer"] != REDUCER or data["input_sha256"] != replay.input_sha256
             or type(position) is not int or not 0 <= position <= len(replay.events)):
         raise ValueError("Checkpoint differs from the frozen replay")
@@ -163,19 +195,23 @@ def _ranking(run: RankingRun) -> dict:
 
 
 def replay_preferences(document: dict, *, checkpoint: dict | None = None,
-                       stop_after: int | None = None) -> dict:
+                       stop_after: int | None = None, source_use: bytes | None = None,
+                       source_use_sha256: str | None = None) -> dict:
     """Return one deterministic snapshot after validating the complete frozen input."""
-    replay = _prepare_replay(document)
+    replay = _prepare_replay(document, source_use, source_use_sha256)
     start, prior = _resume(replay, checkpoint)
     total = len(replay.events)
     end = total if stop_after is None else stop_after
     if type(end) is not int or not start <= end <= total:
         raise ValueError("Stop position must be within the remaining frozen replay")
     counts = _apply(replay, start, end, prior)
-    state = {"schema_version": 1, "reducer": REDUCER, "input_sha256": replay.input_sha256,
+    state = {"schema_version": replay.schema_version, "reducer": REDUCER, "input_sha256": replay.input_sha256,
              "processed": end, "topic_deltas": counts}
+    envelope = {"schema_version": replay.schema_version, "checkpoint": state}
+    if replay.source_use_sha256 is not None:
+        envelope["source_use_sha256"] = replay.source_use_sha256
     if end != total:
-        return {"schema_version": 1, "status": "checkpoint", "checkpoint": state}
+        return {**envelope, "status": "checkpoint"}
     initial = replay.starting_policy
     affinity = dict(initial.topic_affinity)
     for topic, count in counts.items():
@@ -184,7 +220,7 @@ def replay_preferences(document: dict, *, checkpoint: dict | None = None,
                         topic_affinity=affinity)
     counterfactual = create_ranking_run(replay.candidates, candidate, now=replay.baseline.evaluated_at)
     return {
-        "schema_version": 1, "status": "candidate", "checkpoint": state,
+        **envelope, "status": "candidate",
         "candidate_policy": asdict(candidate),
         "baseline_ranking": _ranking(replay.baseline),
         "counterfactual_ranking": _ranking(counterfactual),
@@ -212,20 +248,28 @@ def main() -> int:
     parser.add_argument("--resume", type=Path)
     parser.add_argument("--resume-sha256")
     parser.add_argument("--stop-after", type=int)
+    parser.add_argument("--source-use", type=Path)
+    parser.add_argument("--source-use-sha256")
     args = parser.parse_args()
     if (args.resume is None) != (args.resume_sha256 is None):
         parser.error("--resume and --resume-sha256 must be supplied together")
+    if (args.source_use is None) != (args.source_use_sha256 is None):
+        parser.error("--source-use and --source-use-sha256 must be supplied together")
     try:
         source = _read_pinned(args.input, args.input_sha256)
         checkpoint = None
         if args.resume is not None:
             saved = _read_pinned(args.resume, args.resume_sha256)
             checkpoint = _object(saved.get("checkpoint"), CHECKPOINT_FIELDS, "checkpoint")
-        result = replay_preferences(source, checkpoint=checkpoint, stop_after=args.stop_after)
+        result = replay_preferences(
+            source, checkpoint=checkpoint, stop_after=args.stop_after,
+            source_use=args.source_use.read_bytes() if args.source_use is not None else None,
+            source_use_sha256=args.source_use_sha256,
+        )
         payload = _json({**result, "frozen_input_file_sha256": args.input_sha256})
         _write_new(args.output, payload)
     except (OSError, ValueError, KeyError, TypeError, RecursionError):
-        print("Replay rejected. Check the frozen input, checkpoint, and new output path.",
+        print("Replay rejected. Check the frozen input, source review, checkpoint, and new output path.",
               file=sys.stderr)
         return 1
     print(f"Private replay {result['status']} SHA-256 {_digest(payload)}")

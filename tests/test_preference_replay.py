@@ -180,18 +180,18 @@ POLICY = "resource-policy-v1:" + "b" * 64
 CALLER = "fixture:reviewed-owner"
 
 
-def source_decision(member, action, status):
+def source_decision(member, action, status, *, when=NOW):
     context = {
         "request_id": f"fixture:{action}", "resource_id": member.resource_id,
         "action": action, "purpose": REPLAY_PURPOSE, "caller_id": CALLER,
         "crew_id": None, "mission_id": None, "contract_id": None, "repository_id": None,
-        "audience_id": "private", "fulfilled_duties": [], "now": "2026-01-02T00:00:00Z",
+        "audience_id": "private", "fulfilled_duties": [], "now": when.replace("+00:00", "Z"),
     }
     encoded = json.dumps(context, sort_keys=True, separators=(",", ":")).encode()
     decision = {
         "request_id": context["request_id"], "resource_id": member.resource_id, "status": status,
         "request_fingerprint": "resource-use-v1:" + hashlib.sha256(encoded).hexdigest(),
-        "evaluated_at": NOW, "policy_fingerprint": POLICY,
+        "evaluated_at": when, "policy_fingerprint": POLICY,
         "policy_id": "fixture:source-policy", "evaluator_implementation": EVALUATOR,
         "matched_permissions": ["explicit-permission"] if status == "ALLOW" else [],
         "matched_prohibitions": ["explicit-denial"] if status == "DENY" else [],

@@ -179,6 +179,26 @@ def test_stale_approval_and_in_flight_ranking_cannot_replace_active_policy(relea
         store.connection.close()
 
 
+def test_ingestion_rejects_policy_changed_during_acquisition(release, frozen, tmp_path, monkeypatch):
+    config, approval, files, now = release
+    promotion = _approve(tmp_path / "approve.json", approval)
+    policy_promotion._change(config, "promote", promotion, files, now)
+    rollback = _approve(tmp_path / "rollback.json", _rollback(approval, promotion.sha256))
+
+    def fetcher(_):
+        policy_promotion._change(config, "rollback", rollback, {}, now)
+        return tuple(map(candidate_from_dict, frozen["candidates"]))
+
+    monkeypatch.setattr(cli, "ingest_ranking_run", partial(ingest_ranking_run, fetcher=fetcher))
+    with pytest.raises(ValueError, match="active ranking policy changed before the run was stored"):
+        cli.run(str(config))
+    store = Store(load_config(config).database)
+    try:
+        assert store.connection.execute("SELECT count(*) FROM ranking_runs").fetchone()[0] == 0
+    finally:
+        store.connection.close()
+
+
 def test_atomic_write_failure_then_expired_policy_can_be_recovered(release, tmp_path, monkeypatch):
     config, approval, files, now = release
     selected = load_config(config)

@@ -39,6 +39,36 @@ def _valid_version(value: object) -> bool:
             and all(33 <= ord(char) <= 126 and char not in "?&#/\\%" for char in value))
 
 
+def _version_metadata(blob: Any, version_id: str, max_bytes: int) -> tuple[str, int]:
+    properties = blob.get_blob_properties()
+    etag, size = properties.etag, properties.size
+    if (properties.version_id != version_id or not isinstance(etag, str) or not etag
+            or type(size) is not int or not 0 < size <= max_bytes):
+        raise RecoveryError("version metadata is missing or outside the size limit")
+    return etag, size
+
+
+def _download_version(blob: Any, staged: Path, etag: str, size: int, max_bytes: int) -> str:
+    download = blob.download_blob(etag=etag, match_condition=MatchConditions.IfNotModified)
+    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_BINARY", 0)
+    digest = hashlib.sha256()
+    written = 0
+    with os.fdopen(os.open(staged, flags, 0o600), "wb") as output:
+        for chunk in download.chunks():
+            if not isinstance(chunk, bytes):
+                raise RecoveryError("snapshot stream returned an invalid chunk")
+            written += len(chunk)
+            if written > size or written > max_bytes:
+                raise RecoveryError("snapshot exceeds its verified size")
+            digest.update(chunk)
+            output.write(chunk)
+        output.flush()
+        os.fsync(output.fileno())
+    if written != size:
+        raise RecoveryError("snapshot size does not match version metadata")
+    return digest.hexdigest()
+
+
 @contextmanager
 def staged_versioned_snapshot(
     blob: Any, *, version_id: str, staging_dir: Path, max_bytes: int,
@@ -56,31 +86,10 @@ def staged_versioned_snapshot(
     with tempfile.TemporaryDirectory(prefix="tpa-recovery-", dir=staging_dir) as directory:
         staged = Path(directory) / "snapshot.sqlite3"
         try:
-            properties = blob.get_blob_properties()
-            etag = properties.etag
-            size = properties.size
-            if (properties.version_id != version_id or not isinstance(etag, str) or not etag
-                    or type(size) is not int or not 0 < size <= max_bytes):
-                raise RecoveryError("version metadata is missing or outside the size limit")
-            download = blob.download_blob(etag=etag, match_condition=MatchConditions.IfNotModified)
-            flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_BINARY", 0)
-            digest = hashlib.sha256()
-            written = 0
-            with os.fdopen(os.open(staged, flags, 0o600), "wb") as output:
-                for chunk in download.chunks():
-                    if not isinstance(chunk, bytes):
-                        raise RecoveryError("snapshot stream returned an invalid chunk")
-                    written += len(chunk)
-                    if written > size or written > max_bytes:
-                        raise RecoveryError("snapshot exceeds its verified size")
-                    digest.update(chunk)
-                    output.write(chunk)
-                output.flush()
-                os.fsync(output.fileno())
-            if written != size:
-                raise RecoveryError("snapshot size does not match version metadata")
+            etag, size = _version_metadata(blob, version_id, max_bytes)
+            digest = _download_version(blob, staged, etag, size, max_bytes)
             validate_snapshot(staged)
-            receipt = RecoveryReceipt(version_id=version_id, etag=etag, size=size, sha256=digest.hexdigest())
+            receipt = RecoveryReceipt(version_id=version_id, etag=etag, size=size, sha256=digest)
         except Exception as exc:
             raise RecoveryError("selected version could not be staged or validated") from exc
         yield staged, receipt

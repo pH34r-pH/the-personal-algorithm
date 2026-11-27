@@ -109,7 +109,18 @@ Policy is versioned configuration. A natural-language interface may propose a pa
 
 ### Learner
 
-Consumes Interaction events and produces derived preference state. It must not mutate historical events.
+The [offline preference replay](preference-replay.md) reduces frozen explicit
+feedback into a candidate policy and compares two reference rankings.
+
+## Implementation status
+
+| Surface | Current code and qualification |
+| --- | --- |
+| Reference ranking and explanations | Generated runs and explanations are stored and replayed from exact candidate and policy snapshots. See [the ranking contracts](contracts.md#rankingrun-and-impression). |
+| Feedback storage | The private API can record a feedback event linked to a confirmed impression. See [Interaction](contracts.md#interaction). |
+| Preference replay | The local command checks frozen inputs and verifies checkpoints before comparing candidate and baseline rankings. Synthetic tests cover the reducer and local file lifecycle. |
+| Archive and provider lifecycle | The [application runbook](application.md) covers private archive bootstrap and provider connection state. |
+| Deployment and promotion | [Instance authentication](instance-auth.md) describes the hosted owner boundary. Verify any candidate promotion or hosted qualification with exact release and runtime evidence. |
 
 ### Presentation
 

@@ -1,6 +1,8 @@
+import asyncio
 import io
 import zipfile
 
+import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
@@ -64,6 +66,31 @@ def test_archive_upload_respects_streaming_size_limit(tmp_path):
 
     assert response.status_code == 413
     assert "configured upload limit" in response.json()["detail"]
+
+
+def test_cancelled_upload_removes_partial_file_and_keeps_existing_archives(tmp_path):
+    inbox = ArchiveInbox(Store(), tmp_path)
+
+    async def check():
+        ready = asyncio.Event()
+
+        async def interrupted_chunks():
+            yield b"partial synthetic upload"
+            ready.set()
+            await asyncio.Event().wait()
+
+        task = asyncio.create_task(inbox.store_stream("interrupted.zip", interrupted_chunks()))
+        await asyncio.wait_for(ready.wait(), timeout=5)
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+
+    existing = tmp_path / "existing-archive"
+    existing.write_bytes(b"untouched")
+    asyncio.run(check())
+    assert list(tmp_path.glob("archive-*")) == []
+    assert existing.read_bytes() == b"untouched"
+    assert inbox.list() == ()
 
 
 def test_archive_manifest_flags_unsafe_member_names_without_extracting(tmp_path):

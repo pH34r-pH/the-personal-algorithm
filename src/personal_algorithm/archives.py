@@ -108,9 +108,8 @@ class ArchiveInbox:
             )
             self._save(record)
             return record
-        except Exception:
+        finally:
             tmp.unlink(missing_ok=True)
-            raise
 
     def get(self, sha256: str) -> ArchiveRecord | None:
         row = self.store.connection.execute(

@@ -24,7 +24,9 @@ The core remains useful without a model API or GPU.
 
 The repository contains portable Candidate / RankedCandidate / Explanation / Interaction / Policy contracts, SQLite-backed state, deterministic ranking, source and provider abstractions, open-feed ingestion, private application/API surfaces, historical-import plumbing, deployment documentation, and CI/structural quality gates.
 
-Implementation changes quickly. The default branch and tests are authoritative; [the roadmap](docs/roadmap.md) describes intended milestones rather than promises.
+The [implementation status](docs/architecture.md#implementation-status)
+links current behavior to its contracts. The [roadmap](docs/roadmap.md)
+records intended milestones.
 
 ## Quick start
 

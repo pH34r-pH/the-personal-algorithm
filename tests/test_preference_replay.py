@@ -8,7 +8,13 @@ from datetime import datetime
 import pytest
 
 from personal_algorithm import preference_replay
-from personal_algorithm.ranking_runs import RankingInput, create_ranking_run, ranking_run_to_dict
+from personal_algorithm.ranking_runs import (
+    RankingInput,
+    candidate_snapshot,
+    create_ranking_run,
+    ranking_run_to_dict,
+)
+from personal_algorithm.replay_source_use import REPLAY_PURPOSE, ReplaySourceInput
 from personal_algorithm.serialization import candidate_from_dict, policy_from_dict
 from personal_algorithm.store import Store
 
@@ -167,3 +173,182 @@ def test_cli_rejects_wrong_pin_and_corrupt_json_without_writing(frozen, tmp_path
     assert preference_replay.main() == 1
     assert hashlib.sha256(source.read_bytes()).hexdigest() != expected
     assert not outcome.exists()
+
+
+EVALUATOR = "resource-policy-evaluator-v1:sha256:" + "a" * 64
+POLICY = "resource-policy-v1:" + "b" * 64
+CALLER = "fixture:reviewed-owner"
+
+
+def source_decision(member, action, status):
+    context = {
+        "request_id": f"fixture:{action}", "resource_id": member.resource_id,
+        "action": action, "purpose": REPLAY_PURPOSE, "caller_id": CALLER,
+        "crew_id": None, "mission_id": None, "contract_id": None, "repository_id": None,
+        "audience_id": "private", "fulfilled_duties": [], "now": "2026-01-02T00:00:00Z",
+    }
+    encoded = json.dumps(context, sort_keys=True, separators=(",", ":")).encode()
+    decision = {
+        "request_id": context["request_id"], "resource_id": member.resource_id, "status": status,
+        "request_fingerprint": "resource-use-v1:" + hashlib.sha256(encoded).hexdigest(),
+        "evaluated_at": NOW, "policy_fingerprint": POLICY,
+        "policy_id": "fixture:source-policy", "evaluator_implementation": EVALUATOR,
+        "matched_permissions": ["explicit-permission"] if status == "ALLOW" else [],
+        "matched_prohibitions": ["explicit-denial"] if status == "DENY" else [],
+        "unsatisfied_duties": [],
+    }
+    return {"request": context, "decision": decision}
+
+
+@pytest.fixture
+def reviewed_sources(frozen):
+    candidates = [candidate_from_dict(value) for value in frozen["candidates"]]
+    members = [
+        ReplaySourceInput("candidate", candidate.source, candidate.source_id, candidate_snapshot(candidate).sha256)
+        for candidate in candidates
+    ]
+    for event in frozen["interactions"]:
+        encoded = (json.dumps(event, sort_keys=True, separators=(",", ":")) + "\n").encode()
+        members.append(ReplaySourceInput("interaction", event["origin"], event["event_id"],
+                                         hashlib.sha256(encoded).hexdigest()))
+    return {
+        "schema_version": 1, "evaluator_implementation": EVALUATOR, "caller_id": CALLER,
+        "sources": [
+            {
+                **asdict(member), "trust_class": "external-source", "data_class": "owner-private",
+                "rights_reference": "fixture:reviewed-owner-consent", "fresh_until": "2026-01-03T00:00:00Z",
+                "policy_fingerprint": POLICY,
+                "decisions": {
+                    action: source_decision(member, action, status)
+                    for action, status in (
+                        ("index", "ALLOW"), ("evaluate", "ALLOW"), ("ai-augment", "DENY"),
+                        ("ai-training", "DENY"), ("publish", "DENY"),
+                    )
+                },
+            }
+            for member in members
+        ],
+    }
+
+
+def governed_input(frozen, reviewed_sources):
+    payload = json.dumps(reviewed_sources, sort_keys=True).encode()
+    expected = hashlib.sha256(payload).hexdigest()
+    return (
+        {**frozen, "schema_version": 2, "source_use_sha256": expected},
+        {"source_use": payload, "source_use_sha256": expected},
+    )
+
+
+def test_governed_replay_keeps_actions_independent_and_resumes_exactly(frozen, reviewed_sources):
+    document, options = governed_input(frozen, reviewed_sources)
+    partial = preference_replay.replay_preferences(document, stop_after=2, **options)
+    full = preference_replay.replay_preferences(document, **options)
+    assert full["schema_version"] == full["checkpoint"]["schema_version"] == 2
+    assert full["source_use_sha256"] == document["source_use_sha256"]
+    assert preference_replay.replay_preferences(document, checkpoint=partial["checkpoint"], **options) == full
+    assert full["checkpoint"]["topic_deltas"] == {"databases": 2, "systems": -1}
+    assert CALLER not in json.dumps(full)
+    assert PRIVATE_MARKER not in json.dumps(full)
+
+
+def test_governed_checkpoint_cannot_resume_under_a_different_source_review(frozen, reviewed_sources):
+    document, options = governed_input(frozen, reviewed_sources)
+    partial = preference_replay.replay_preferences(document, stop_after=1, **options)
+    reviewed_sources["sources"][0]["rights_reference"] = "fixture:successor-review"
+    revised, new_options = governed_input(frozen, reviewed_sources)
+    with pytest.raises(ValueError, match="Checkpoint differs"):
+        preference_replay.replay_preferences(revised, checkpoint=partial["checkpoint"], **new_options)
+
+
+@pytest.mark.parametrize("change, message", [
+    ("missing", "does not cover every"),
+    ("duplicate", "unique frozen input"),
+    ("wrong_source", "unique frozen input"),
+    ("changed_candidate", "unique frozen input"),
+    ("changed_feedback", "unique frozen input"),
+    ("expired", "review has expired"),
+])
+def test_governed_replay_rejects_source_mismatch_before_ranking(frozen, reviewed_sources, change, message, monkeypatch):
+    rows = reviewed_sources["sources"]
+    if change == "missing":
+        rows.pop()
+    elif change == "duplicate":
+        rows.append(rows[0])
+    elif change == "wrong_source":
+        rows[0]["source_id"] = "different-source"
+    elif change == "changed_candidate":
+        frozen["candidates"][0]["metadata"]["raw"] = "changed evidence"
+    elif change == "changed_feedback":
+        frozen["interactions"][0]["kind"] = "saved"
+    else:
+        rows[0]["fresh_until"] = NOW
+    document, options = governed_input(frozen, reviewed_sources)
+
+    def unexpected(*args, **kwargs):
+        pytest.fail("Source verification must precede ranking")
+
+    monkeypatch.setattr(preference_replay, "create_ranking_run", unexpected)
+    with pytest.raises(ValueError, match=message):
+        preference_replay.replay_preferences(document, **options)
+
+
+@pytest.mark.parametrize("change, message", [
+    ("missing", "independent evaluation"),
+    ("denied", "explicitly allow"),
+    ("wrong_context", "action and context"),
+    ("wrong_commitment", "exact request"),
+    ("wrong_purpose", "explicitly allow"),
+    ("wrong_audience", "explicitly allow"),
+    ("wrong_evaluator", "exact request"),
+    ("wrong_policy", "exact request"),
+    ("outstanding_duty", "explicitly allow"),
+])
+def test_governed_replay_requires_the_exact_explicit_evaluation_decision(frozen, reviewed_sources, change, message):
+    decisions = reviewed_sources["sources"][0]["decisions"]
+    approval = decisions["evaluate"]
+    if change == "missing":
+        del decisions["evaluate"]
+    elif change == "denied":
+        approval["decision"]["status"] = "DENY"
+    elif change == "wrong_context":
+        approval["request"]["caller_id"] = "fixture:other-owner"
+    elif change == "wrong_commitment":
+        approval["request"]["audience_id"] = "public"
+    elif change in ("wrong_purpose", "wrong_audience"):
+        field = "purpose" if change == "wrong_purpose" else "audience_id"
+        approval["request"][field] = "separate-use"
+        encoded = json.dumps(approval["request"], sort_keys=True, separators=(",", ":")).encode()
+        approval["decision"]["request_fingerprint"] = "resource-use-v1:" + hashlib.sha256(encoded).hexdigest()
+    elif change == "wrong_evaluator":
+        approval["decision"]["evaluator_implementation"] += "different"
+    elif change == "wrong_policy":
+        approval["decision"]["policy_fingerprint"] = "resource-policy-v1:" + "f" * 64
+    else:
+        approval["decision"]["unsatisfied_duties"] = ["prior consent"]
+    document, options = governed_input(frozen, reviewed_sources)
+    with pytest.raises(ValueError, match=message):
+        preference_replay.replay_preferences(document, **options)
+
+
+def test_governed_cli_requires_both_reviewed_pins(frozen, reviewed_sources, tmp_path, monkeypatch, capsys):
+    source, use, output = [tmp_path / name for name in ("input.json", "sources.json", "candidate.json")]
+    document, options = governed_input(frozen, reviewed_sources)
+    source_pin = _write_fixture(source, document)
+    use.write_bytes(options["source_use"])
+    command = ["replay", "--input", str(source), "--input-sha256", source_pin, "--output", str(output)]
+    monkeypatch.setattr(sys, "argv", command)
+    assert preference_replay.main() == 1
+    assert not output.exists()
+    args = [*command, "--source-use", str(use), "--source-use-sha256", options["source_use_sha256"]]
+    use.write_bytes(use.read_bytes() + b" ")
+    monkeypatch.setattr(sys, "argv", args)
+    assert preference_replay.main() == 1
+    assert not output.exists()
+    use.write_bytes(options["source_use"])
+    assert preference_replay.main() == 0
+    observed = json.loads(output.read_bytes())
+    assert observed["source_use_sha256"] == options["source_use_sha256"]
+    assert observed["frozen_input_file_sha256"] == source_pin
+    captured = capsys.readouterr()
+    assert PRIVATE_MARKER not in captured.out + captured.err

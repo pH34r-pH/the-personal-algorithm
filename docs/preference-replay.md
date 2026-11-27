@@ -55,8 +55,9 @@ reviewed snapshot.
 
 The command writes complete output to a new path and reports its SHA-256.
 Keep the checkpoint and candidate private. The candidate carries derived
-preferences and ranking evidence for operator review. Evaluation against
-observed outcomes and promotion require separate evidence and approvals.
+preferences and ranking evidence for operator review. Use a separate
+[outcome comparison](#compare-later-observed-outcomes) before considering
+promotion.
 
 ## Governed source use
 
@@ -109,3 +110,63 @@ Its output retains the source-use digest without copying private decision
 contents. Promotion remains a separate operator action.
 
 [long-haul-policy]: https://github.com/pH34r-pH/long-haul/blob/4d5ae441869d9459ed597294b1090fc3f19141c1/docs/resource-policy.md
+
+## Compare later observed outcomes
+
+Use a governed replay and the exact candidate written by its CLI. Freeze
+an observation window and a private outcome packet. Its root has integer
+`schema_version: 1`, `frozen_input_sha256`, `candidate_sha256`,
+`observed_through`, `source_use_sha256`, and an `outcomes` list.
+Bind the exact replay input and candidate file bytes. Include one observed
+binary outcome per judged candidate.
+
+Each outcome row has `candidate_id`, `candidate_input_sha256`, a native
+`source` and `source_id` pair, `observed_at`, and Boolean `relevant`.
+Take the candidate snapshot digest from the ranking. The outcome time
+must follow the replay time and fall within the review window. Leave
+unjudged candidates out of the outcomes list.
+
+Use an independent [source-use manifest](#governed-source-use) for those
+outcome rows. Use kind `outcome`, the native source pair, and the digest
+of the row with its timestamp normalized to UTC and an explicit
+`+00:00` offset. Hash sorted, compact UTF-8 JSON with a final LF. The
+resource ID uses `urn:personal-algorithm:replay:outcome:sha256:` followed by
+the row digest. Obtain the evaluator's private `evaluate` decision at
+`observed_through` for the same preference-replay purpose. Review current
+rights and withdrawals again when consuming real inputs.
+
+Optionally supply a separately approved forecast packet. It binds
+`schema_version: 1`, `frozen_input_sha256`, and `candidate_sha256`.
+It also has `frozen_at`, the approved `method_sha256`, and
+`predictions`. Include a prediction for every candidate. Each row has
+the same candidate ID and snapshot digest fields as the outcome, plus
+`baseline` and `counterfactual` probabilities in the interval
+`[0, 1]`. Freeze those forecasts after or at replay and before any
+of the scored outcomes. Keep probability generation and review
+with the forecast owner. The reference rankings provide ordinal scores.
+
+```sh
+python -m personal_algorithm.replay_outcomes \
+  --input "$frozen_input" "$reviewed_input_sha" \
+  --source-use "$source_manifest" "$reviewed_source_sha" \
+  --candidate "$candidate" "$candidate_sha" \
+  --outcomes "$outcomes" "$outcomes_sha" \
+  --outcome-source-use "$outcome_sources" "$outcome_sources_sha" \
+  --forecasts "$forecasts" "$forecast_sha" --output "$private_comparison"
+```
+
+The command reconstructs both rankings and their explanations and compares
+the resulting candidate byte for byte. For each ranking the comparison
+reports correctly ordered positive-negative pairs among the judged
+candidates. It reports top-rank regret only when the whole slate has
+observed labels. Regret is the difference between the best observed
+label in the slate and the label for the top-ranked candidate. Missing
+judgments stay unknown. These are retrospective measurements of the
+judged population. Selection and exposure can affect measured outcomes.
+
+When a forecast packet is supplied, calibration includes the Brier score
+and the observed and mean predicted rates in five equally spaced bins
+from zero to one. The last bin includes one. Only judged candidates
+contribute to those measurements. Counts and rational values are exact.
+Keep the comparison private. Its receipt carries digests and aggregate
+counts. Operator promotion and rollback require their own decision.

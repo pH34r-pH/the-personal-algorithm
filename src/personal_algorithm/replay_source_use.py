@@ -9,7 +9,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 
 REPLAY_PURPOSE = "personal-algorithm-preference-replay"
-_ACTIONS = {"index", "ai-augment", "evaluate", "ai-training", "publish"}
+_ACTIONS = {"index", "ai-augment", "evaluate", "derive", "ai-training", "publish"}
 _STATUSES = ("ALLOW", "DENY", "REQUIRE_CONSENT", "REQUIRE_REVIEW", "UNKNOWN", "CONFLICT",
              "EXPIRED", "RETRACTED", "UNAVAILABLE")
 _TRUST_CLASSES = ("external-source", "repository-reference", "accepted-memory", "reviewed-task",
@@ -81,14 +81,13 @@ def _check_decision(action, record, member, policy, evaluator, caller, when):
             or not _text(decision.get("policy_id")) or _source_time(decision.get("evaluated_at")) != when
             or decision.get("status") not in _STATUSES):
         raise ValueError("Source-use decision differs from the exact request, policy, or evaluator")
-    if action == "evaluate" and not _allows_private_evaluation(request, decision):
-        raise ValueError("Source-use policy must explicitly allow constrained preference evaluation")
+    return request, decision
 
 
-def _allows_private_evaluation(request, decision) -> bool:
+def _allows_private_use(request, decision, purpose) -> bool:
     permissions = decision.get("matched_permissions")
     return (
-        request.get("purpose") == REPLAY_PURPOSE
+        request.get("purpose") == purpose
         and request.get("audience_id") == "private"
         and decision["status"] == "ALLOW"
         and decision.get("unsatisfied_duties") == []
@@ -97,7 +96,14 @@ def _allows_private_evaluation(request, decision) -> bool:
     )
 
 
-def _source_row(row, remaining: set[ReplaySourceInput], evaluator, caller, when) -> None:
+def _required_decisions(value, action):
+    if not isinstance(value, dict) or not value.keys() <= _ACTIONS or action not in value:
+        label = "evaluation" if action == "evaluate" else action
+        raise ValueError(f"Replay source-use requires an independent {label} decision")
+    return value
+
+
+def _source_row(row, remaining: set[ReplaySourceInput], evaluator, caller, when, action, purpose) -> None:
     if not isinstance(row, dict) or set(row) != _FIELDS:
         raise ValueError("Invalid replay source-use row")
     if not all(_text(row[key]) for key in ("kind", "source", "source_id", "rights_reference")):
@@ -112,16 +118,17 @@ def _source_row(row, remaining: set[ReplaySourceInput], evaluator, caller, when)
     policy = row["policy_fingerprint"]
     if not _matches(policy, "resource-policy-v1:" + _DIGEST):
         raise ValueError("Replay source-use row requires an exact policy fingerprint")
-    decisions = row["decisions"]
-    if not isinstance(decisions, dict) or not decisions.keys() <= _ACTIONS or "evaluate" not in decisions:
-        raise ValueError("Replay source-use requires an independent evaluation decision")
-    for action, receipt in decisions.items():
-        _check_decision(action, receipt, member, policy, evaluator, caller, when)
+    decisions = _required_decisions(row["decisions"], action)
+    for declared_action, receipt in decisions.items():
+        request, decision = _check_decision(declared_action, receipt, member, policy, evaluator, caller, when)
+        if declared_action == action and not _allows_private_use(request, decision, purpose):
+            raise ValueError("Source-use policy must explicitly allow the reviewed private purpose")
     remaining.remove(member)
 
 
 def verify_replay_source_use(
     manifest: dict, members: set[ReplaySourceInput], *, when: datetime,
+    action: str = "evaluate", purpose: str = REPLAY_PURPOSE,
 ) -> None:
     """Check exact source coverage and decisions from a pinned trusted review record."""
     fields = {"schema_version", "evaluator_implementation", "caller_id", "sources"}
@@ -135,6 +142,6 @@ def verify_replay_source_use(
         raise ValueError("Replay source-use requires a reviewed evaluator and caller identity")
     remaining = set(members)
     for row in manifest["sources"]:
-        _source_row(row, remaining, evaluator, caller, when)
+        _source_row(row, remaining, evaluator, caller, when, action, purpose)
     if remaining:
         raise ValueError("Replay source-use manifest does not cover every frozen input")

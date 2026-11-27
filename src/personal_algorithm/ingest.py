@@ -6,11 +6,38 @@ from collections.abc import Callable, Iterable
 from datetime import UTC, datetime
 
 from .models import Candidate, Policy, RankedCandidate
-from .ranking import ReferenceRanker
+from .ranking_runs import RankingRun, create_ranking_run
 from .source_config import SourceConfig, acquire
 from .store import Store
 
 SourceFetcher = Callable[[SourceConfig], tuple[Candidate, ...]]
+
+
+def ingest_ranking_run(
+    sources: Iterable[SourceConfig],
+    *,
+    policy: Policy,
+    store: Store,
+    fetcher: SourceFetcher = acquire,
+    now: datetime | None = None,
+) -> RankingRun | None:
+    """Fetch and persist one generated ranking run across configured feeds.
+
+    Duplicate candidate IDs collapse to one ranking in a single ingestion run.
+    The persistent store remains the audit trail for each ranking run.
+    """
+    now = now or datetime.now(UTC)
+    candidates: dict[str, Candidate] = {}
+
+    for source in sources:
+        for candidate in fetcher(source):
+            candidates[candidate.id] = candidate
+
+    if not candidates:
+        return None
+    run = create_ranking_run(candidates.values(), policy, now=now)
+    store.put_ranking_run(run)
+    return run
 
 
 def ingest_sources(
@@ -21,28 +48,8 @@ def ingest_sources(
     fetcher: SourceFetcher = acquire,
     now: datetime | None = None,
 ) -> tuple[RankedCandidate, ...]:
-    """Fetch, persist, rank, and return candidates across configured feeds.
-
-    Duplicate candidate IDs collapse to one ranking in a single ingestion run.
-    The persistent store remains the audit trail for each ranking run.
-    """
-    now = now or datetime.now(UTC)
-    ranker = ReferenceRanker()
-    candidates: dict[str, Candidate] = {}
-
-    for source in sources:
-        for candidate in fetcher(source):
-            candidates[candidate.id] = candidate
-
-    ranked: list[RankedCandidate] = []
-    for candidate in candidates.values():
-        store.put_candidate(candidate)
-        item = ranker.rank(candidate, policy, now=now)
-        store.put_ranking(item)
-        ranked.append(item)
-
-    ranked.sort(key=lambda item: (-item.score, item.candidate.id))
-    return tuple(ranked)
+    run = ingest_ranking_run(sources, policy=policy, store=store, fetcher=fetcher, now=now)
+    return tuple(member.ranked for member in run.members) if run else ()
 
 
 # Compatibility helper for the first M1 RSS-only API.

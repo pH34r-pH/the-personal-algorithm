@@ -15,7 +15,9 @@ import personal_algorithm.application as application_module
 from personal_algorithm.application import ApplicationSettings, create_private_app
 from personal_algorithm.connections import ConnectionStore
 from personal_algorithm.leased_snapshot import LeasedSnapshot, SnapshotUnavailable
+from personal_algorithm.models import Candidate, Interaction, InteractionKind, Policy
 from personal_algorithm.providers import Connection, ConnectionStatus
+from personal_algorithm.ranking_runs import create_ranking_run
 from personal_algorithm.store import Store
 
 
@@ -185,6 +187,29 @@ def test_fenced_store_publishes_and_restores_sqlite(tmp_path):
     restored.connection.close()
 
 
+def test_fenced_ranking_and_presentation_recover_from_the_same_snapshot(tmp_path):
+    blob = FakeBlob(_seed_database(tmp_path / "seed.sqlite"))
+    store = Store(tmp_path / "ranking.sqlite", leased_snapshot=LeasedSnapshot(blob))
+    now = datetime(2026, 1, 1, tzinfo=UTC)
+    source = Candidate("a", "fixture", "a", "https://example.invalid", "Sample", now, "paper")
+    run = create_ranking_run([source], Policy("fixture", {"recency": 1}), now=now)
+    try:
+        store.put_ranking_run(run)
+        impression = store.record_impression(run.id, ("a",), presented_at=now, identifier="shown")
+        store.put_interaction(Interaction("a", InteractionKind.SAVED, now, impression_id=impression.id))
+    finally:
+        store.connection.close()
+    restored = Store(tmp_path / "restored.sqlite", leased_snapshot=LeasedSnapshot(blob))
+    try:
+        assert restored.get_ranking_run(run.id) == run
+        assert restored.get_impression(impression.id) == impression
+        assert restored.connection.execute("SELECT impression_id FROM interaction_impressions").fetchall() == [
+            ("shown",),
+        ]
+    finally:
+        restored.connection.close()
+
+
 def test_failed_publication_stops_store_and_keeps_local_evidence(tmp_path):
     blob = FakeBlob(_seed_database(tmp_path / "seed.sqlite"))
     local = tmp_path / "local.sqlite"
@@ -195,6 +220,8 @@ def test_failed_publication_stops_store_and_keeps_local_evidence(tmp_path):
         store.connection.commit()
     with pytest.raises(SnapshotUnavailable):
         store.connection.execute("SELECT * FROM fence_probe")
+    with pytest.raises(SnapshotUnavailable):
+        store.get_ranking_run("unavailable")
     store.connection.close()
     with sqlite3.connect(local) as check:
         assert check.execute("SELECT COUNT(*) FROM fence_probe").fetchone() == (2,)

@@ -5,7 +5,15 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any
 
-from .models import Candidate, Interaction, InteractionKind, Policy, RankedCandidate
+from .models import (
+    Candidate,
+    Impression,
+    Interaction,
+    InteractionKind,
+    Policy,
+    RankedCandidate,
+    finite_number_map,
+)
 
 
 class ValidationError(ValueError):
@@ -32,6 +40,8 @@ def _datetime(value: Any, key: str) -> datetime:
 
 
 def candidate_from_dict(data: dict[str, Any]) -> Candidate:
+    if not isinstance(data, dict):
+        raise ValidationError("candidate must be an object")
     discovered = _datetime(data.get("discovered_at"), "discovered_at")
     published_raw = data.get("published_at")
     topics = data.get("topics", [])
@@ -55,19 +65,17 @@ def candidate_from_dict(data: dict[str, Any]) -> Candidate:
 
 
 def policy_from_dict(data: dict[str, Any]) -> Policy:
-    weights = data.get("weights")
-    if not isinstance(weights, dict) or not all(
-        isinstance(k, str) and isinstance(v, (int, float)) for k, v in weights.items()
-    ):
-        raise ValidationError("weights must map feature names to numbers")
-    return Policy(
-        version=_required_text(data, "version"),
-        weights={key: float(value) for key, value in weights.items()},
-        topic_affinity={key: float(value) for key, value in data.get("topic_affinity", {}).items()},
-        source_affinity={
-            key: float(value) for key, value in data.get("source_affinity", {}).items()
-        },
-    )
+    if not isinstance(data, dict):
+        raise ValidationError("policy must be an object")
+    try:
+        return Policy(
+            version=_required_text(data, "version"),
+            weights=finite_number_map(data.get("weights"), "weights"),
+            topic_affinity=finite_number_map(data.get("topic_affinity", {}), "topic_affinity"),
+            source_affinity=finite_number_map(data.get("source_affinity", {}), "source_affinity"),
+        )
+    except (TypeError, ValueError) as exc:
+        raise ValidationError(str(exc)) from exc
 
 
 def interaction_from_dict(data: dict[str, Any]) -> Interaction:
@@ -81,7 +89,27 @@ def interaction_from_dict(data: dict[str, Any]) -> Interaction:
         occurred_at=_datetime(data.get("occurred_at"), "occurred_at"),
         explicit=bool(data.get("explicit", True)),
         metadata=data.get("metadata", {}),
+        impression_id=_required_text(data, "impression_id") if data.get("impression_id") is not None else None,
     )
+
+
+def presentation_from_dict(data: dict[str, Any]) -> tuple[str, tuple[str, ...], datetime, str | None]:
+    ids = data.get("candidate_ids")
+    if not isinstance(ids, list) or not ids or not all(isinstance(value, str) and value.strip() for value in ids):
+        raise ValidationError("candidate_ids must be an ordered nonempty list of candidate IDs")
+    return (
+        _required_text(data, "run_id"), tuple(ids), _datetime(data.get("presented_at"), "presented_at"),
+        _required_text(data, "id") if data.get("id") is not None else None,
+    )
+
+
+def impression_to_dict(impression: Impression) -> dict[str, Any]:
+    return {
+        "id": impression.id,
+        "run_id": impression.run_id,
+        "presented_at": impression.presented_at.isoformat(),
+        "candidate_ids": list(impression.candidate_ids),
+    }
 
 
 def ranked_to_dict(ranked: RankedCandidate) -> dict[str, Any]:

@@ -11,12 +11,24 @@ import tempfile
 import threading
 import time
 import weakref
-from contextlib import closing
+from contextlib import closing, contextmanager
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
+from uuid import uuid4
 
 from .leased_snapshot import LeasedSnapshot, SnapshotUnavailable
-from .models import Candidate, Interaction, PersonalEvent, RankedCandidate
+from .models import (
+    Candidate,
+    Explanation,
+    Impression,
+    Interaction,
+    PersonalEvent,
+    RankedCandidate,
+    ScoreContribution,
+)
+from .ranking_runs import RankingInput, RankingMember, RankingRun, replay_ranking_run
+from .serialization import candidate_from_dict, ranked_to_dict
 from .snapshot_validation import validate_snapshot
 
 SCHEMA = """
@@ -68,6 +80,54 @@ CREATE TABLE IF NOT EXISTS interactions (
     occurred_at TEXT NOT NULL,
     explicit INTEGER NOT NULL,
     metadata_json TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS ranking_inputs (
+    sha256 TEXT PRIMARY KEY,
+    kind TEXT NOT NULL CHECK (kind IN ('candidate', 'policy')),
+    content_json TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS ranking_runs (
+    id TEXT PRIMARY KEY,
+    evaluated_at TEXT NOT NULL,
+    ranker TEXT NOT NULL,
+    policy_sha256 TEXT NOT NULL REFERENCES ranking_inputs(sha256),
+    context_version TEXT,
+    context_sha256 TEXT,
+    candidate_count INTEGER NOT NULL CHECK (candidate_count > 0)
+);
+
+CREATE TABLE IF NOT EXISTS ranking_run_items (
+    run_id TEXT NOT NULL REFERENCES ranking_runs(id),
+    position INTEGER NOT NULL CHECK (position > 0),
+    ranking_id INTEGER NOT NULL UNIQUE REFERENCES rankings(id),
+    candidate_id TEXT NOT NULL REFERENCES candidates(id),
+    input_sha256 TEXT NOT NULL REFERENCES ranking_inputs(sha256),
+    PRIMARY KEY (run_id, position),
+    UNIQUE (run_id, candidate_id)
+);
+
+CREATE TABLE IF NOT EXISTS impressions (
+    id TEXT PRIMARY KEY,
+    run_id TEXT NOT NULL REFERENCES ranking_runs(id),
+    presented_at TEXT NOT NULL,
+    candidate_count INTEGER NOT NULL CHECK (candidate_count > 0)
+);
+
+CREATE TABLE IF NOT EXISTS impression_items (
+    impression_id TEXT NOT NULL REFERENCES impressions(id),
+    position INTEGER NOT NULL CHECK (position > 0),
+    candidate_id TEXT NOT NULL REFERENCES candidates(id),
+    PRIMARY KEY (impression_id, position),
+    UNIQUE (impression_id, candidate_id)
+);
+
+CREATE TABLE IF NOT EXISTS interaction_impressions (
+    interaction_id INTEGER PRIMARY KEY REFERENCES interactions(id),
+    impression_id TEXT NOT NULL,
+    candidate_id TEXT NOT NULL,
+    FOREIGN KEY (impression_id, candidate_id) REFERENCES impression_items(impression_id, candidate_id)
 );
 """
 
@@ -179,6 +239,12 @@ class _FencedCursor:
             self._connection._check()
             return self._cursor.rowcount
 
+    @property
+    def lastrowid(self):
+        with self._connection._lock:
+            self._connection._check()
+            return self._cursor.lastrowid
+
 
 class _DurableConnection:
     def __init__(self, connection: sqlite3.Connection, snapshot: Path | None,
@@ -250,6 +316,39 @@ class _DurableConnection:
     def rollback(self) -> None:
         with self._lock:
             self._connection.rollback()
+
+    @contextmanager
+    def idle_lock(self, operation: str):
+        """Hold the connection after any existing transaction has finished."""
+        deadline = time.monotonic() + 30
+        while True:
+            with self._lock:
+                self._check()
+                if not self._connection.in_transaction:
+                    yield
+                    return
+            if time.monotonic() >= deadline:
+                raise TimeoutError(f"database remained busy before {operation}")
+            time.sleep(0.01)
+
+    @contextmanager
+    def ranking_transaction(self, *, write: bool):
+        with self.idle_lock("ranking"):
+            row_factory = self._connection.row_factory
+            self._connection.row_factory = sqlite3.Row
+            try:
+                self.execute("BEGIN IMMEDIATE" if write else "BEGIN")
+                yield self
+                if write:
+                    self.commit()
+                else:
+                    self._check()
+                    self._connection.commit()
+            except BaseException:
+                self._connection.rollback()
+                raise
+            finally:
+                self._connection.row_factory = row_factory
 
     def finish_request(self) -> None:
         """Reject an unfinished transaction, retaining committed recovery data."""
@@ -336,6 +435,11 @@ class Store:
         self.connection = _DurableConnection(raw_connection, snapshot, leased_snapshot)
 
     def put_candidate(self, candidate: Candidate) -> None:
+        self._upsert_candidate(self.connection, candidate)
+        self.connection.commit()
+
+    @staticmethod
+    def _upsert_candidate(connection, candidate: Candidate) -> None:
         payload = {
             "author": candidate.author,
             "summary": candidate.summary,
@@ -344,7 +448,7 @@ class Store:
             "metadata": candidate.metadata,
             "provenance": candidate.provenance,
         }
-        self.connection.execute(
+        connection.execute(
             """INSERT INTO candidates
                (id, source, source_id, canonical_url, title, discovered_at, content_type, payload_json)
                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
@@ -365,7 +469,6 @@ class Store:
                 json.dumps(payload, sort_keys=True),
             ),
         )
-        self.connection.commit()
 
     def put_personal_event(self, event: PersonalEvent) -> None:
         self.put_personal_events((event,))
@@ -408,15 +511,8 @@ class Store:
         """Commit one fully validated disk-backed batch in one SQL statement."""
         if count == 0:
             return 0
-        deadline = time.monotonic() + 30
-        connection = self.connection
-        while True:
-            with connection._lock:
-                if not connection.in_transaction:
-                    return self._merge_staged_locked(path, count)
-            if time.monotonic() >= deadline:
-                raise TimeoutError("database remained busy before import")
-            time.sleep(0.01)
+        with self.connection.idle_lock("import"):
+            return self._merge_staged_locked(path, count)
 
     def _merge_staged_locked(self, path: Path, count: int) -> int:
         connection = self.connection
@@ -450,20 +546,12 @@ class Store:
         )
 
     def put_ranking(self, ranked: RankedCandidate) -> None:
-        explanation = {
-            "final_score": ranked.explanation.final_score,
-            "contributions": [
-                {
-                    "feature": c.feature,
-                    "value": c.value,
-                    "weight": c.weight,
-                    "contribution": c.contribution,
-                    "reason": c.reason,
-                }
-                for c in ranked.explanation.contributions
-            ],
-        }
-        self.connection.execute(
+        self._insert_ranking(self.connection, ranked)
+        self.connection.commit()
+
+    @staticmethod
+    def _insert_ranking(connection, ranked: RankedCandidate) -> int:
+        cursor = connection.execute(
             """INSERT INTO rankings
                (candidate_id, score, ranker, policy_version, ranked_at, explanation_json)
                VALUES (?, ?, ?, ?, ?, ?)""",
@@ -473,13 +561,132 @@ class Store:
                 ranked.ranker,
                 ranked.policy_version,
                 ranked.ranked_at.isoformat(),
-                json.dumps(explanation, sort_keys=True),
+                json.dumps(ranked_to_dict(ranked)["explanation"], sort_keys=True, allow_nan=False),
             ),
         )
-        self.connection.commit()
+        assert cursor.lastrowid is not None
+        return cursor.lastrowid
+
+    @staticmethod
+    def _insert_ranking_input(connection, snapshot: RankingInput) -> None:
+        connection.execute(
+            """INSERT INTO ranking_inputs (sha256, kind, content_json) VALUES (?, ?, ?)
+               ON CONFLICT(sha256) DO NOTHING""",
+            (snapshot.sha256, snapshot.kind, snapshot.content),
+        )
+        row = connection.execute(
+            "SELECT kind, content_json FROM ranking_inputs WHERE sha256 = ?", (snapshot.sha256,),
+        ).fetchone()
+        if row is None or tuple(row) != (snapshot.kind, snapshot.content):
+            raise ValueError("stored ranking input differs from its content-addressed snapshot")
+
+    def put_ranking_run(self, run: RankingRun) -> None:
+        observed = replay_ranking_run(run)
+        with self.connection.ranking_transaction(write=True) as connection:
+            self._insert_ranking_input(connection, run.policy)
+            connection.execute(
+                """INSERT INTO ranking_runs
+                   (id, evaluated_at, ranker, policy_sha256, context_version, context_sha256, candidate_count)
+                   VALUES (?, ?, ?, ?, ?, ?, ?)""",
+                (run.id, run.evaluated_at.isoformat(), run.ranker, run.policy.sha256,
+                 run.context_version, run.context_sha256, len(run.members)),
+            )
+            for position, (member, ranked) in enumerate(zip(run.members, observed, strict=True), 1):
+                self._insert_ranking_input(connection, member.snapshot)
+                self._upsert_candidate(connection, ranked.candidate)
+                identifier = self._insert_ranking(connection, ranked)
+                connection.execute(
+                    """INSERT INTO ranking_run_items
+                       (run_id, position, ranking_id, candidate_id, input_sha256)
+                       VALUES (?, ?, ?, ?, ?)""",
+                    (run.id, position, identifier, ranked.candidate.id, member.snapshot.sha256),
+                )
+
+    def get_ranking_run(self, identifier: str) -> RankingRun:
+        with self.connection.ranking_transaction(write=False) as connection:
+            header = connection.execute(
+                """SELECT run.*, policy.kind, policy.content_json FROM ranking_runs AS run
+                   LEFT JOIN ranking_inputs AS policy ON policy.sha256 = run.policy_sha256
+                   WHERE run.id = ?""",
+                (identifier,),
+            ).fetchone()
+            if header is None:
+                raise KeyError(identifier)
+            records = connection.execute(
+                """SELECT item.position, item.input_sha256, item.candidate_id AS member_candidate_id,
+                          input.kind, input.content_json, ranking.*
+                   FROM ranking_run_items AS item
+                   LEFT JOIN ranking_inputs AS input ON input.sha256 = item.input_sha256
+                   LEFT JOIN rankings AS ranking ON ranking.id = item.ranking_id
+                   WHERE item.run_id = ? ORDER BY item.position""",
+                (identifier,),
+            ).fetchall()
+        _require_contiguous_positions(records, header["candidate_count"], "ranking run")
+        run = RankingRun(
+            identifier, datetime.fromisoformat(header["evaluated_at"]), header["ranker"],
+            RankingInput(header["kind"], header["policy_sha256"], header["content_json"]),
+            tuple(_ranking_member(row) for row in records),
+            header["context_version"], header["context_sha256"],
+        )
+        replay_ranking_run(run)
+        return run
+
+    def record_impression(self, run_id: str, candidate_ids: tuple[str, ...], *,
+                          presented_at: datetime, identifier: str | None = None) -> Impression:
+        _validate_impression_inputs(candidate_ids, presented_at, identifier)
+        run = self.get_ranking_run(run_id)
+        if presented_at < run.evaluated_at:
+            raise ValueError("presentation predates the ranking run")
+        eligible = {member.ranked.candidate.id for member in run.members}
+        if not set(candidate_ids) <= eligible:
+            raise ValueError("presented candidates must belong to the ranking run")
+        impression = Impression(identifier or uuid4().hex, run_id, presented_at.astimezone(UTC),
+                                tuple(candidate_ids))
+        with self.connection.ranking_transaction(write=True) as connection:
+            previous = _read_impression(connection, impression.id)
+            if previous is not None:
+                if previous != impression:
+                    raise ValueError("impression ID already names different presentation evidence")
+                return previous
+            connection.execute(
+                """INSERT INTO impressions (id, run_id, presented_at, candidate_count)
+                   VALUES (?, ?, ?, ?)""",
+                (impression.id, run_id, impression.presented_at.isoformat(), len(candidate_ids)),
+            )
+            connection.executemany(
+                "INSERT INTO impression_items (impression_id, position, candidate_id) VALUES (?, ?, ?)",
+                [(impression.id, index, candidate) for index, candidate in enumerate(candidate_ids, 1)],
+            )
+        return impression
+
+    def get_impression(self, identifier: str) -> Impression:
+        with self.connection.ranking_transaction(write=False) as connection:
+            impression = _read_impression(connection, identifier)
+        if impression is None:
+            raise KeyError(identifier)
+        return impression
 
     def put_interaction(self, interaction: Interaction) -> None:
-        self.connection.execute(
+        if interaction.impression_id is None:
+            self._insert_interaction(self.connection, interaction)
+            self.connection.commit()
+            return
+        with self.connection.ranking_transaction(write=True) as connection:
+            impression = _read_impression(connection, interaction.impression_id)
+            if impression is None or interaction.candidate_id not in impression.candidate_ids:
+                raise ValueError("interaction candidate was not presented in this impression")
+            if interaction.occurred_at.utcoffset() is None or interaction.occurred_at < impression.presented_at:
+                raise ValueError("interaction must follow the recorded presentation")
+            identifier = self._insert_interaction(connection, interaction)
+            connection.execute(
+                """INSERT INTO interaction_impressions (interaction_id, impression_id, candidate_id)
+                   VALUES (?, ?, ?)""",
+                (identifier, impression.id, interaction.candidate_id),
+            )
+
+    @staticmethod
+    def _insert_interaction(connection, interaction: Interaction) -> int:
+        cursor = connection.execute(
             """INSERT INTO interactions
                (candidate_id, kind, occurred_at, explicit, metadata_json)
                VALUES (?, ?, ?, ?, ?)""",
@@ -491,4 +698,72 @@ class Store:
                 json.dumps(interaction.metadata, sort_keys=True),
             ),
         )
-        self.connection.commit()
+        assert cursor.lastrowid is not None
+        return cursor.lastrowid
+
+
+def _validate_impression_inputs(candidate_ids, presented_at, identifier):
+    if presented_at.utcoffset() is None:
+        raise ValueError("presentation time must include a timezone")
+    if not candidate_ids or not all(isinstance(value, str) and value.strip() for value in candidate_ids):
+        raise ValueError("a presentation requires an ordered nonempty candidate list")
+    if len(set(candidate_ids)) != len(candidate_ids):
+        raise ValueError("a presentation cannot repeat a candidate")
+    if identifier is not None and (not isinstance(identifier, str) or not identifier.strip()):
+        raise ValueError("impression ID must be a nonempty string")
+
+
+def _require_contiguous_positions(rows, count: int, description: str) -> None:
+    if (type(count) is not int or count <= 0 or len(rows) != count
+            or any(row["position"] != index for index, row in enumerate(rows, 1))):
+        raise ValueError(f"{description} membership is incomplete or out of order")
+
+
+def _read_impression(connection, identifier: str) -> Impression | None:
+    header = connection.execute(
+        """SELECT impression.*, run.evaluated_at
+           FROM impressions AS impression
+           JOIN ranking_runs AS run ON run.id = impression.run_id
+           WHERE impression.id = ?""",
+        (identifier,),
+    ).fetchone()
+    if header is None:
+        return None
+    rows = connection.execute(
+        """SELECT item.position, item.candidate_id, member.candidate_id AS ranked_candidate_id
+           FROM impression_items AS item
+           LEFT JOIN ranking_run_items AS member ON member.run_id = ?
+                                                AND member.candidate_id = item.candidate_id
+           WHERE item.impression_id = ? ORDER BY item.position""",
+        (header["run_id"], identifier),
+    ).fetchall()
+    _require_contiguous_positions(rows, header["candidate_count"], "impression")
+    if any(row["ranked_candidate_id"] is None for row in rows):
+        raise ValueError("impression contains a candidate outside the ranking run")
+    presented_at = datetime.fromisoformat(header["presented_at"])
+    evaluated_at = datetime.fromisoformat(header["evaluated_at"])
+    if presented_at.utcoffset() is None or evaluated_at.utcoffset() is None or presented_at < evaluated_at:
+        raise ValueError("impression has invalid presentation chronology")
+    return Impression(
+        identifier, header["run_id"], presented_at,
+        tuple(row["candidate_id"] for row in rows),
+    )
+
+
+def _ranking_member(row: sqlite3.Row) -> RankingMember:
+    snapshot = RankingInput(row["kind"], row["input_sha256"], row["content_json"])
+    candidate = candidate_from_dict(snapshot.load("candidate"))
+    if not (candidate.id == row["member_candidate_id"] == row["candidate_id"]):
+        raise ValueError("ranking member identity differs from its frozen candidate")
+    try:
+        value = json.loads(row["explanation_json"])
+        explanation = Explanation(
+            value["final_score"], tuple(ScoreContribution(**item) for item in value["contributions"]),
+        )
+        ranked = RankedCandidate(
+            candidate, row["score"], row["ranker"], row["policy_version"], explanation,
+            datetime.fromisoformat(row["ranked_at"]),
+        )
+    except (KeyError, ValueError, TypeError) as exc:
+        raise ValueError("ranking member has malformed retained evidence") from exc
+    return RankingMember(snapshot, ranked)

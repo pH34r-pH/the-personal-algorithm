@@ -1,5 +1,6 @@
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
+import pytest
 from fastapi.testclient import TestClient
 
 from personal_algorithm.api import create_app
@@ -79,3 +80,63 @@ def test_interaction_rejects_unknown_candidate():
         },
     )
     assert response.status_code == 409
+
+
+def test_run_order_exposure_and_feedback_are_distinct_local_records(tmp_path):
+    store = Store(tmp_path / "ranking.sqlite3")
+    client = TestClient(create_app(store))
+    first = candidate_payload()
+    second = {**first, "id": "fixture:api-2", "source_id": "api-2"}
+    policy = {"version": "fixture", "weights": {"topic_affinity": -1, "recency": 0}}
+    response = client.post("/ranking-runs", json={"candidates": [second, first], "policy": policy})
+    assert response.status_code == 201, response.text
+    run = response.json()
+    assert [item["candidate_id"] for item in run["candidates"]] == [first["id"], second["id"]]
+    assert [item["position"] for item in run["candidates"]] == [1, 2]
+    assert run["ranker"] == "reference-v0" and not run["context_sha256"]
+    for item in client.get(f"/ranking-runs/{run['id']}").json()["candidates"]:
+        explanation = item["explanation"]
+        total = sum(value["contribution"] for value in explanation["contributions"])
+        assert item["score"] == pytest.approx(total, rel=1e-12, abs=1e-12)
+        assert item["score"] == explanation["final_score"]
+    assert store.connection.execute("SELECT COUNT(*) FROM impressions").fetchone()[0] == 0
+
+    exposed = datetime.fromisoformat(run["evaluated_at"]) + timedelta(seconds=1)
+    presentation = {
+        "id": "presentation", "run_id": run["id"], "candidate_ids": [second["id"], first["id"]],
+        "presented_at": exposed.isoformat(),
+    }
+    result = client.post("/impressions", json=presentation)
+    assert result.status_code == 201 and result.json() == presentation
+    assert client.post("/impressions", json=presentation).json() == presentation
+    assert client.get("/impressions/presentation").json() == presentation
+    assert client.get("/impressions/missing").status_code == 404
+    changed = {**presentation, "candidate_ids": [first["id"]]}
+    assert client.post("/impressions", json=changed).status_code == 409
+    persisted = store.get_impression("presentation")
+    assert persisted.candidate_ids == (second["id"], first["id"])
+
+    interaction = {
+        "candidate_id": second["id"], "kind": "saved",
+        "occurred_at": exposed.isoformat(), "impression_id": persisted.id,
+    }
+    too_early = {**interaction, "occurred_at": run["evaluated_at"]}
+    assert client.post("/interactions", json=too_early).status_code == 409
+    assert client.post("/interactions", json=interaction).status_code == 201
+    link = store.connection.execute(
+        """SELECT exposure.impression_id, interaction.candidate_id
+           FROM interaction_impressions AS exposure
+           JOIN interactions AS interaction ON interaction.id = exposure.interaction_id"""
+    ).fetchone()
+    assert link == ("presentation", second["id"])
+    assert store.connection.execute("SELECT COUNT(*) FROM impressions").fetchone()[0] == 1
+    assert store.connection.execute("SELECT COUNT(*) FROM interactions").fetchone()[0] == 1
+
+    extra = {**first, "id": "other", "source_id": "other"}
+    assert client.post("/candidates", json=extra).status_code == 201
+    store.connection.execute(
+        "UPDATE impression_items SET candidate_id = 'other' WHERE impression_id = ? AND position = 2",
+        (persisted.id,),
+    )
+    store.connection.commit()
+    assert client.get("/impressions/presentation").status_code == 409

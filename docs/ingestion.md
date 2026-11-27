@@ -14,10 +14,15 @@ For each run it:
 
 1. asks the source adapter for Candidates;
 2. deduplicates identical Candidate IDs within the run;
-3. persists candidates;
-4. ranks each candidate under the supplied policy;
-5. persists the complete ranking/explanation trace;
-6. returns a deterministic score-ordered result.
+3. freezes the candidate and policy inputs and evaluates them at one time;
+4. atomically persists the latest candidate rows and generated ranking run;
+5. returns descending score order with candidate ID as the tie-break.
+
+The stored run has a fixed membership and a reproducible explanation for each
+position. The local ingestion command emits each item's `run_id`, position,
+and candidate input digest with its score. A presentation is recorded
+separately when a caller confirms which candidates were shown together.
+[Ranking and presentation contract](contracts.md#rankingrun-and-impression)
 
 The function does not own scheduling, credentials, UI state, or policy editing. Those remain separate concerns.
 

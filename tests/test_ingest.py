@@ -1,6 +1,9 @@
+import json
 from datetime import UTC, datetime
+from functools import partial
 
-from personal_algorithm.ingest import ingest_feeds
+from personal_algorithm import cli
+from personal_algorithm.ingest import ingest_feeds, ingest_ranking_run
 from personal_algorithm.models import Candidate, Policy
 from personal_algorithm.store import Store
 
@@ -52,3 +55,31 @@ def test_configured_feeds_are_deduplicated_ranked_and_persisted():
     assert all(item.ranked_at == NOW for item in ranked)
     assert store.connection.execute("SELECT COUNT(*) FROM candidates").fetchone()[0] == 3
     assert store.connection.execute("SELECT COUNT(*) FROM rankings").fetchone()[0] == 3
+
+
+def test_ingestion_command_returns_the_replay_identity(tmp_path, monkeypatch):
+    database = tmp_path / "ranking.sqlite"
+    config = tmp_path / "config.json"
+    config.write_text(json.dumps({
+        "database": str(database),
+        "feeds": ["https://example.invalid/feed.xml"],
+        "policy": {"version": "fixture", "weights": {}},
+    }), encoding="utf-8")
+
+    def fetcher(_):
+        return _candidate("b", "other"), _candidate("a", "research")
+
+    monkeypatch.setattr(cli, "ingest_ranking_run", partial(ingest_ranking_run, fetcher=fetcher, now=NOW))
+    ranked = cli.run(str(config))
+    assert [(item["candidate_id"], item["position"]) for item in ranked] == [("a", 1), ("b", 2)]
+    run_id = ranked[0]["run_id"]
+    assert all(item["run_id"] == run_id for item in ranked)
+    store = Store(database)
+    try:
+        run = store.get_ranking_run(run_id)
+        assert [item["candidate_input_sha256"] for item in ranked] == [
+            member.snapshot.sha256 for member in run.members
+        ]
+        assert store.connection.execute("SELECT COUNT(*) FROM impressions").fetchone()[0] == 0
+    finally:
+        store.connection.close()

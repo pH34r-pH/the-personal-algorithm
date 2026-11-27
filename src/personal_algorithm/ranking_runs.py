@@ -76,17 +76,25 @@ def _candidate_snapshot(candidate: Candidate) -> RankingInput:
     return RankingInput.freeze("candidate", value)
 
 
+def _finite_number(value) -> bool:
+    try:
+        return type(value) in (int, float) and isfinite(value)
+    except OverflowError:
+        return False
+
+
 def validate_score(ranked: RankedCandidate) -> None:
     explanation = ranked.explanation
     numeric = [ranked.score, explanation.final_score]
     for value in explanation.contributions:
         numeric.extend((value.value, value.weight, value.contribution))
-        if not isclose(value.value * value.weight, value.contribution,
-                       rel_tol=_TOLERANCE, abs_tol=_TOLERANCE):
+    if not all(map(_finite_number, numeric)):
+        raise ValueError("ranking evidence requires finite numbers")
+    for value in explanation.contributions:
+        expected = float(value.value) * float(value.weight)
+        if not isclose(expected, value.contribution, rel_tol=_TOLERANCE, abs_tol=_TOLERANCE):
             raise ValueError("ranking contribution differs from value times weight")
-    if not all(isfinite(value) for value in numeric):
-        raise ValueError("ranking evidence contains non-finite numbers")
-    total = sum(value.contribution for value in explanation.contributions)
+    total = sum(float(value.contribution) for value in explanation.contributions)
     if not all(isclose(ranked.score, value, rel_tol=_TOLERANCE, abs_tol=_TOLERANCE)
                for value in (explanation.final_score, total)):
         raise ValueError("ranking score differs from its explanation")
@@ -121,6 +129,8 @@ def create_ranking_run(candidates: Iterable[Candidate], policy: Policy, *, now: 
 def replay_ranking_run(run: RankingRun) -> tuple[RankedCandidate, ...]:
     if run.ranker != ReferenceRanker.name or run.context_version is not None or run.context_sha256 is not None:
         raise ValueError("the reference ranker cannot replay an unknown ranker or context")
+    for member in run.members:
+        validate_score(member.ranked)
     observed = _evaluate((member.snapshot for member in run.members), run.policy, _utc(run.evaluated_at))
     if [ranked_to_dict(value.ranked) for value in observed] != [
         ranked_to_dict(member.ranked) for member in run.members

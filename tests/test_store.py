@@ -1,3 +1,4 @@
+import json
 import sqlite3
 import threading
 from concurrent.futures import ThreadPoolExecutor
@@ -375,6 +376,20 @@ def test_ranked_run_reloads_frozen_inputs_and_rejects_malformed_members(tmp_path
     reloaded = store_module.Store(path)
     assert ranking_run_to_dict(reloaded.get_ranking_run(run.id)) == ranking_run_to_dict(run)
     assert reloaded.get_ranking_run(run.id).members[0].ranked.candidate.title == "a"
+    row_id, payload = reloaded.connection.execute(
+        """SELECT ranking.id, ranking.explanation_json FROM rankings AS ranking
+           JOIN ranking_run_items AS item ON item.ranking_id = ranking.id
+           WHERE item.run_id = ?""", (run.id,),
+    ).fetchone()
+    malformed = json.loads(payload)
+    malformed["final_score"] = True
+    reloaded.connection.execute(
+        "UPDATE rankings SET explanation_json = ? WHERE id = ?", (json.dumps(malformed), row_id),
+    )
+    reloaded.connection.commit()
+    with pytest.raises(ValueError, match="requires finite numbers"):
+        reloaded.get_ranking_run(run.id)
+    reloaded.connection.execute("UPDATE rankings SET explanation_json = ? WHERE id = ?", (payload, row_id))
     reloaded.connection.execute("DELETE FROM ranking_run_items WHERE run_id = ?", (run.id,))
     reloaded.connection.commit()
     with pytest.raises(ValueError, match="membership is incomplete"):
@@ -395,3 +410,35 @@ def test_concurrent_runs_keep_separate_membership_on_one_store(tmp_path):
     assert all(store.get_ranking_run(run.id) == run for run in runs)
     assert store.connection.execute("SELECT COUNT(*) FROM ranking_inputs").fetchone()[0] == 3
     assert store.connection.execute("SELECT COUNT(*) FROM ranking_run_items").fetchone()[0] == 12
+
+
+def test_ranking_waits_for_an_existing_writer_without_committing_its_work(tmp_path, monkeypatch):
+    store = store_module.Store(tmp_path / "ranking.sqlite3")
+    now = datetime(2026, 1, 1, tzinfo=UTC)
+    run = create_ranking_run(
+        [_ranking_candidate("ranked", "ranked", now=now)], Policy("fixture", {}), now=now,
+    )
+    waiting = threading.Event()
+    resume = threading.Event()
+
+    def wait_for_writer(_):
+        waiting.set()
+        assert resume.wait(5)
+
+    monkeypatch.setattr(store_module.time, "sleep", wait_for_writer)
+    store.connection.execute("BEGIN IMMEDIATE")
+    store._upsert_candidate(store.connection, _ranking_candidate("pending", "pending", now=now))
+    try:
+        with ThreadPoolExecutor(max_workers=1) as pool:
+            future = pool.submit(store.put_ranking_run, run)
+            try:
+                assert waiting.wait(5)
+                assert store.connection.in_transaction
+                store.connection.rollback()
+            finally:
+                resume.set()
+            future.result(timeout=5)
+        assert store.get_ranking_run(run.id) == run
+        assert store.connection.execute("SELECT id FROM candidates").fetchall() == [("ranked",)]
+    finally:
+        store.connection.close()

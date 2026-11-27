@@ -7,8 +7,8 @@ import json
 from pathlib import Path
 
 from .config import load_config
-from .ingest import ingest_sources
-from .serialization import ranked_to_dict
+from .ingest import ingest_ranking_run
+from .ranking_runs import ranking_run_to_dict
 from .store import Store
 
 
@@ -17,8 +17,13 @@ def run(config_path: str) -> list[dict]:
     database = Path(config.database)
     database.parent.mkdir(parents=True, exist_ok=True)
     store = Store(database)
-    ranked = ingest_sources(config.sources, policy=config.policy, store=store)
-    return [ranked_to_dict(item) for item in ranked]
+    try:
+        run = ingest_ranking_run(config.sources, policy=config.policy, store=store)
+        if run is None:
+            return []
+        return [{**item, "run_id": run.id} for item in ranking_run_to_dict(run)["candidates"]]
+    finally:
+        store.connection.close()
 
 
 def main() -> None:

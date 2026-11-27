@@ -109,6 +109,8 @@ def test_run_order_exposure_and_feedback_are_distinct_local_records(tmp_path):
     result = client.post("/impressions", json=presentation)
     assert result.status_code == 201 and result.json() == presentation
     assert client.post("/impressions", json=presentation).json() == presentation
+    assert client.get("/impressions/presentation").json() == presentation
+    assert client.get("/impressions/missing").status_code == 404
     changed = {**presentation, "candidate_ids": [first["id"]]}
     assert client.post("/impressions", json=changed).status_code == 409
     persisted = store.get_impression("presentation")
@@ -129,3 +131,12 @@ def test_run_order_exposure_and_feedback_are_distinct_local_records(tmp_path):
     assert link == ("presentation", second["id"])
     assert store.connection.execute("SELECT COUNT(*) FROM impressions").fetchone()[0] == 1
     assert store.connection.execute("SELECT COUNT(*) FROM interactions").fetchone()[0] == 1
+
+    extra = {**first, "id": "other", "source_id": "other"}
+    assert client.post("/candidates", json=extra).status_code == 201
+    store.connection.execute(
+        "UPDATE impression_items SET candidate_id = 'other' WHERE impression_id = ? AND position = 2",
+        (persisted.id,),
+    )
+    store.connection.commit()
+    assert client.get("/impressions/presentation").status_code == 409

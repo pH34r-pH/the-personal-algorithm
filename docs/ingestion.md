@@ -19,8 +19,10 @@ For each run it:
 5. returns descending score order with candidate ID as the tie-break.
 
 The stored run has a fixed membership and a reproducible explanation for each
-position. A presentation is recorded separately when a caller confirms which
-candidates were shown together. [Ranking and presentation contract](contracts.md#rankingrun-and-impression)
+position. The local ingestion command emits each item's `run_id`, position,
+and candidate input digest with its score. A presentation is recorded
+separately when a caller confirms which candidates were shown together.
+[Ranking and presentation contract](contracts.md#rankingrun-and-impression)
 
 The function does not own scheduling, credentials, UI state, or policy editing. Those remain separate concerns.
 

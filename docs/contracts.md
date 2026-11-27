@@ -71,6 +71,8 @@ presentation time. The caller can supply a stable impression ID for retries.
 Reusing that ID requires the same run, order, and time. Presentation evidence
 and later interactions have separate identities. Records from before this
 feature retain their original evidence.
+`GET /impressions/{id}` retrieves the retained presentation order after checking
+its run membership and chronology.
 
 ## Interaction
 

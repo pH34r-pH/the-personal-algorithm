@@ -7,6 +7,7 @@ from typing import Any
 
 from .models import (
     Candidate,
+    Impression,
     Interaction,
     InteractionKind,
     Policy,
@@ -100,6 +101,15 @@ def presentation_from_dict(data: dict[str, Any]) -> tuple[str, tuple[str, ...], 
         _required_text(data, "run_id"), tuple(ids), _datetime(data.get("presented_at"), "presented_at"),
         _required_text(data, "id") if data.get("id") is not None else None,
     )
+
+
+def impression_to_dict(impression: Impression) -> dict[str, Any]:
+    return {
+        "id": impression.id,
+        "run_id": impression.run_id,
+        "presented_at": impression.presented_at.isoformat(),
+        "candidate_ids": list(impression.candidate_ids),
+    }
 
 
 def ranked_to_dict(ranked: RankedCandidate) -> dict[str, Any]:

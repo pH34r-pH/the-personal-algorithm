@@ -633,14 +633,7 @@ class Store:
 
     def record_impression(self, run_id: str, candidate_ids: tuple[str, ...], *,
                           presented_at: datetime, identifier: str | None = None) -> Impression:
-        if presented_at.utcoffset() is None:
-            raise ValueError("presentation time must include a timezone")
-        if not candidate_ids or not all(isinstance(value, str) and value.strip() for value in candidate_ids):
-            raise ValueError("a presentation requires an ordered nonempty candidate list")
-        if len(set(candidate_ids)) != len(candidate_ids):
-            raise ValueError("a presentation cannot repeat a candidate")
-        if identifier is not None and (not isinstance(identifier, str) or not identifier.strip()):
-            raise ValueError("impression ID must be a nonempty string")
+        _validate_impression_inputs(candidate_ids, presented_at, identifier)
         run = self.get_ranking_run(run_id)
         if presented_at < run.evaluated_at:
             raise ValueError("presentation predates the ranking run")
@@ -709,6 +702,17 @@ class Store:
         return cursor.lastrowid
 
 
+def _validate_impression_inputs(candidate_ids, presented_at, identifier):
+    if presented_at.utcoffset() is None:
+        raise ValueError("presentation time must include a timezone")
+    if not candidate_ids or not all(isinstance(value, str) and value.strip() for value in candidate_ids):
+        raise ValueError("a presentation requires an ordered nonempty candidate list")
+    if len(set(candidate_ids)) != len(candidate_ids):
+        raise ValueError("a presentation cannot repeat a candidate")
+    if identifier is not None and (not isinstance(identifier, str) or not identifier.strip()):
+        raise ValueError("impression ID must be a nonempty string")
+
+
 def _require_contiguous_positions(rows, count: int, description: str) -> None:
     if (type(count) is not int or count <= 0 or len(rows) != count
             or any(row["position"] != index for index, row in enumerate(rows, 1))):
@@ -716,16 +720,32 @@ def _require_contiguous_positions(rows, count: int, description: str) -> None:
 
 
 def _read_impression(connection, identifier: str) -> Impression | None:
-    header = connection.execute("SELECT * FROM impressions WHERE id = ?", (identifier,)).fetchone()
+    header = connection.execute(
+        """SELECT impression.*, run.evaluated_at
+           FROM impressions AS impression
+           JOIN ranking_runs AS run ON run.id = impression.run_id
+           WHERE impression.id = ?""",
+        (identifier,),
+    ).fetchone()
     if header is None:
         return None
     rows = connection.execute(
-        "SELECT position, candidate_id FROM impression_items WHERE impression_id = ? ORDER BY position",
-        (identifier,),
+        """SELECT item.position, item.candidate_id, member.candidate_id AS ranked_candidate_id
+           FROM impression_items AS item
+           LEFT JOIN ranking_run_items AS member ON member.run_id = ?
+                                                AND member.candidate_id = item.candidate_id
+           WHERE item.impression_id = ? ORDER BY item.position""",
+        (header["run_id"], identifier),
     ).fetchall()
     _require_contiguous_positions(rows, header["candidate_count"], "impression")
+    if any(row["ranked_candidate_id"] is None for row in rows):
+        raise ValueError("impression contains a candidate outside the ranking run")
+    presented_at = datetime.fromisoformat(header["presented_at"])
+    evaluated_at = datetime.fromisoformat(header["evaluated_at"])
+    if presented_at.utcoffset() is None or evaluated_at.utcoffset() is None or presented_at < evaluated_at:
+        raise ValueError("impression has invalid presentation chronology")
     return Impression(
-        identifier, header["run_id"], datetime.fromisoformat(header["presented_at"]),
+        identifier, header["run_id"], presented_at,
         tuple(row["candidate_id"] for row in rows),
     )
 

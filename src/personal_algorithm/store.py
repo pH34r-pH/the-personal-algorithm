@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import shutil
@@ -9,6 +10,7 @@ import sqlite3
 import tempfile
 import threading
 import time
+from contextlib import closing
 from pathlib import Path
 from typing import Any
 
@@ -79,11 +81,44 @@ def _initialize_schema(connection: sqlite3.Connection, *, attempts: int = 8) -> 
             time.sleep(min(0.25 * (attempt + 1), 2.0))
 
 
+def _logical_database_digest(path: Path) -> bytes:
+    """Compare SQLite contents without exposing records or creating a database."""
+    digest = hashlib.sha256()
+    uri = path.resolve().as_uri() + "?mode=ro"
+    with closing(sqlite3.connect(uri, uri=True, timeout=30.0)) as connection:
+        if connection.execute("PRAGMA quick_check").fetchone() != ("ok",):
+            raise sqlite3.DatabaseError("database failed SQLite quick_check")
+        for line in connection.iterdump():
+            digest.update(line.encode("utf-8"))
+            digest.update(b"\n")
+    return digest.digest()
+
+
 def _restore_snapshot(database: Path, snapshot: Path | None) -> None:
     if snapshot is None or not snapshot.exists():
         return
+    if database.exists():
+        if _logical_database_digest(database) != _logical_database_digest(snapshot):
+            raise RuntimeError("local database and persistent snapshot differ; recovery required")
+        return
     database.parent.mkdir(parents=True, exist_ok=True)
-    shutil.copyfile(snapshot, database)
+    descriptor, filename = tempfile.mkstemp(
+        prefix=f".{database.name}.", suffix=".restore", dir=database.parent,
+    )
+    staged = Path(filename)
+    try:
+        with os.fdopen(descriptor, "wb") as destination, snapshot.open("rb") as source:
+            shutil.copyfileobj(source, destination)
+            destination.flush()
+            os.fsync(destination.fileno())
+        snapshot_digest = _logical_database_digest(staged)
+        try:
+            os.link(staged, database)
+        except FileExistsError:
+            if _logical_database_digest(database) != snapshot_digest:
+                raise RuntimeError("local database and persistent snapshot differ; recovery required") from None
+    finally:
+        staged.unlink(missing_ok=True)
 
 
 class _DurableConnection:

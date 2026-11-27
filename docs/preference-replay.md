@@ -169,4 +169,5 @@ and the observed and mean predicted rates in five equally spaced bins
 from zero to one. The last bin includes one. Only judged candidates
 contribute to those measurements. Counts and rational values are exact.
 Keep the comparison private. Its receipt carries digests and aggregate
-counts. Operator promotion and rollback require their own decision.
+counts. Use a separate [operator decision](policy-promotion.md) for
+promotion or rollback.

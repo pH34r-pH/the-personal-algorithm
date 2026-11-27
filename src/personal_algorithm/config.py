@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass
+from hashlib import sha256
 from pathlib import Path
 
 from .models import Policy
@@ -18,9 +19,15 @@ class InstanceConfig:
     database: str = "data/personal-algorithm.sqlite3"
 
 
-def load_config(path: str | Path) -> InstanceConfig:
+def load_config(path: str | Path, *, expected_sha256: str | None = None) -> InstanceConfig:
     try:
-        data = json.loads(Path(path).read_text())
+        if expected_sha256 is None:
+            data = json.loads(Path(path).read_text())
+        else:
+            raw = Path(path).read_bytes()
+            if sha256(raw).hexdigest() != expected_sha256:
+                raise ValidationError("configuration differs from the approved bytes")
+            data = json.loads(raw)
     except (OSError, json.JSONDecodeError) as exc:
         raise ValidationError(f"cannot read configuration: {exc}") from exc
 

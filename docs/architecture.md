@@ -120,7 +120,8 @@ feedback into a candidate policy and compares two reference rankings.
 | Feedback storage | The private API can record a feedback event linked to a confirmed impression. See [Interaction](contracts.md#interaction). |
 | Preference replay | The local command checks frozen inputs and verifies checkpoints before comparing candidate and baseline rankings. Synthetic tests cover the reducer and local file lifecycle. |
 | Archive and provider lifecycle | The [application runbook](application.md) covers private archive bootstrap and provider connection state. |
-| Deployment and promotion | [Instance authentication](instance-auth.md) describes the hosted owner boundary. Verify any candidate promotion or hosted qualification with exact release and runtime evidence. |
+| Policy promotion and rollback | [Local policy promotion](policy-promotion.md) checks the operator approval, reproduced evaluation and source permissions before switching local ingestion. Hosted behavior has its own qualification. |
+| Deployment | [Instance authentication](instance-auth.md) describes the hosted owner boundary and its release and runtime evidence. |
 
 ### Presentation
 

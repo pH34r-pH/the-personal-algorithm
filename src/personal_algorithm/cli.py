@@ -18,7 +18,7 @@ def run(config_path: str) -> list[dict]:
     database.parent.mkdir(parents=True, exist_ok=True)
     store = Store(database)
     try:
-        run = ingest_ranking_run(config.sources, policy=config.policy, store=store)
+        run = ingest_ranking_run(config.sources, policy=config.policy, store=store, use_active_policy=True)
         if run is None:
             return []
         return [{**item, "run_id": run.id} for item in ranking_run_to_dict(run)["candidates"]]

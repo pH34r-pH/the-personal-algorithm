@@ -12,6 +12,7 @@ import threading
 import time
 import weakref
 from contextlib import closing, contextmanager
+from dataclasses import asdict
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -24,11 +25,12 @@ from .models import (
     Impression,
     Interaction,
     PersonalEvent,
+    Policy,
     RankedCandidate,
     ScoreContribution,
 )
 from .ranking_runs import RankingInput, RankingMember, RankingRun, replay_ranking_run
-from .serialization import candidate_from_dict, ranked_to_dict
+from .serialization import candidate_from_dict, policy_from_dict, ranked_to_dict
 from .snapshot_validation import validate_snapshot
 
 SCHEMA = """
@@ -86,6 +88,17 @@ CREATE TABLE IF NOT EXISTS ranking_inputs (
     sha256 TEXT PRIMARY KEY,
     kind TEXT NOT NULL CHECK (kind IN ('candidate', 'policy')),
     content_json TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS ranking_policy_changes (
+    sequence INTEGER PRIMARY KEY,
+    approval_sha256 TEXT NOT NULL UNIQUE,
+    action TEXT NOT NULL CHECK (action IN ('promote', 'rollback')),
+    previous_approval_sha256 TEXT REFERENCES ranking_policy_changes(approval_sha256),
+    previous_policy_sha256 TEXT NOT NULL REFERENCES ranking_inputs(sha256),
+    policy_sha256 TEXT NOT NULL REFERENCES ranking_inputs(sha256),
+    valid_until TEXT,
+    approval_json TEXT NOT NULL
 );
 
 CREATE TABLE IF NOT EXISTS ranking_runs (
@@ -580,9 +593,117 @@ class Store:
         if row is None or tuple(row) != (snapshot.kind, snapshot.content):
             raise ValueError("stored ranking input differs from its content-addressed snapshot")
 
-    def put_ranking_run(self, run: RankingRun) -> None:
+    @staticmethod
+    def _policy_snapshot(connection, sha256: str) -> RankingInput:
+        row = connection.execute(
+            "SELECT kind, content_json FROM ranking_inputs WHERE sha256 = ?", (sha256,),
+        ).fetchone()
+        if row is None or row["kind"] != "policy":
+            raise ValueError("policy history lacks its exact policy snapshot")
+        snapshot = RankingInput("policy", sha256, row["content_json"])
+        snapshot.load("policy")
+        return snapshot
+
+    @staticmethod
+    def _latest_policy_change(connection):
+        return connection.execute(
+            "SELECT * FROM ranking_policy_changes ORDER BY sequence DESC LIMIT 1",
+        ).fetchone()
+
+    @staticmethod
+    def _require_current_policy(valid_until: str | None, now: datetime) -> None:
+        if valid_until is not None and datetime.fromisoformat(valid_until) <= now:
+            raise ValueError("policy approval has expired; review or roll back the active policy")
+
+    def ranking_policy_status(self, default: Policy) -> dict:
+        with self.connection.ranking_transaction(write=False) as connection:
+            latest = self._latest_policy_change(connection)
+            if latest is None:
+                return {"policy_sha256": RankingInput.freeze("policy", asdict(default)).sha256,
+                        "approval_sha256": None, "valid_until": None}
+            return {key: latest[key] for key in ("policy_sha256", "approval_sha256", "valid_until")}
+
+    def active_ranking_policy(self, default: Policy, *, now: datetime | None = None) -> Policy:
+        with self.connection.ranking_transaction(write=False) as connection:
+            latest = self._latest_policy_change(connection)
+            if latest is None:
+                return default
+            self._require_current_policy(latest["valid_until"], now or datetime.now(UTC))
+            snapshot = self._policy_snapshot(connection, latest["policy_sha256"])
+            return policy_from_dict(snapshot.load("policy"))
+
+    def _restore_policy(self, connection, approval_sha256: str | None) -> tuple[RankingInput, str | None]:
+        if approval_sha256 is None:
+            first = connection.execute(
+                "SELECT previous_policy_sha256 FROM ranking_policy_changes ORDER BY sequence LIMIT 1",
+            ).fetchone()
+            if first is None:
+                raise ValueError("no policy transition is available to roll back")
+            return self._policy_snapshot(connection, first["previous_policy_sha256"]), None
+        prior = connection.execute(
+            "SELECT policy_sha256, valid_until FROM ranking_policy_changes WHERE approval_sha256 = ?",
+            (approval_sha256,),
+        ).fetchone()
+        if prior is None:
+            raise ValueError("rollback must name a retained policy transition")
+        return self._policy_snapshot(connection, prior["policy_sha256"]), prior["valid_until"]
+
+    def record_ranking_policy_change(
+        self, default: Policy, approval_sha: str, approval: dict, *,
+        promoted: RankingInput | None = None, valid_until: str | None = None, now: datetime | None = None,
+    ) -> bool:
+        """Append an approved policy transition in the same transaction as its inputs."""
+        saved = json.dumps(approval, sort_keys=True, separators=(",", ":"), allow_nan=False)
+        with self.connection.ranking_transaction(write=True) as connection:
+            existing = connection.execute(
+                "SELECT approval_json FROM ranking_policy_changes WHERE approval_sha256 = ?", (approval_sha,),
+            ).fetchone()
+            if existing is not None:
+                if existing["approval_json"] != saved:
+                    raise ValueError("policy approval differs from the retained transition")
+                return False
+            latest = self._latest_policy_change(connection)
+            previous = RankingInput.freeze("policy", asdict(default)) if latest is None else (
+                self._policy_snapshot(connection, latest["policy_sha256"])
+            )
+            previous_approval = latest["approval_sha256"] if latest is not None else None
+            if (approval["previous_approval_sha256"] != previous_approval
+                    or approval["previous_policy_sha256"] != previous.sha256):
+                raise ValueError("reviewed starting policy is no longer active")
+            target = promoted
+            if approval["action"] == "rollback":
+                target, valid_until = self._restore_policy(connection, approval["restore_approval_sha256"])
+            elif valid_until is None:
+                raise ValueError("promoted policy requires a current source-use deadline")
+            if target is None or target.sha256 != approval["policy_sha256"] or target.sha256 == previous.sha256:
+                raise ValueError("approved target must differ from the current policy and match its exact snapshot")
+            self._require_current_policy(valid_until, now or datetime.now(UTC))
+            self._insert_ranking_input(connection, previous)
+            self._insert_ranking_input(connection, target)
+            connection.execute(
+                """INSERT INTO ranking_policy_changes
+                   (approval_sha256, action, previous_approval_sha256, previous_policy_sha256,
+                    policy_sha256, valid_until, approval_json) VALUES (?, ?, ?, ?, ?, ?, ?)""",
+                (approval_sha, approval["action"], previous_approval, previous.sha256,
+                 target.sha256, valid_until, saved),
+            )
+            return True
+
+    def _check_active_ranking_run(self, connection, run: RankingRun, default: Policy) -> None:
+        latest = self._latest_policy_change(connection)
+        if latest is None:
+            expected = RankingInput.freeze("policy", asdict(default)).sha256
+        else:
+            self._require_current_policy(latest["valid_until"], datetime.now(UTC))
+            expected = latest["policy_sha256"]
+        if expected != run.policy.sha256:
+            raise ValueError("active ranking policy changed before the run was stored")
+
+    def put_ranking_run(self, run: RankingRun, *, configured_policy: Policy | None = None) -> None:
         observed = replay_ranking_run(run)
         with self.connection.ranking_transaction(write=True) as connection:
+            if configured_policy is not None:
+                self._check_active_ranking_run(connection, run, configured_policy)
             self._insert_ranking_input(connection, run.policy)
             connection.execute(
                 """INSERT INTO ranking_runs

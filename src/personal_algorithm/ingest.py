@@ -20,6 +20,7 @@ def ingest_ranking_run(
     store: Store,
     fetcher: SourceFetcher = acquire,
     now: datetime | None = None,
+    use_active_policy: bool = False,
 ) -> RankingRun | None:
     """Fetch and persist one generated ranking run across configured feeds.
 
@@ -27,6 +28,7 @@ def ingest_ranking_run(
     The persistent store remains the audit trail for each ranking run.
     """
     now = now or datetime.now(UTC)
+    resolved = store.active_ranking_policy(policy) if use_active_policy else policy
     candidates: dict[str, Candidate] = {}
 
     for source in sources:
@@ -35,8 +37,11 @@ def ingest_ranking_run(
 
     if not candidates:
         return None
-    run = create_ranking_run(candidates.values(), policy, now=now)
-    store.put_ranking_run(run)
+    run = create_ranking_run(candidates.values(), resolved, now=now)
+    if use_active_policy:
+        store.put_ranking_run(run, configured_policy=policy)
+    else:
+        store.put_ranking_run(run)
     return run
 
 

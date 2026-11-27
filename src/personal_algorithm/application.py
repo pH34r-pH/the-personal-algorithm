@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+import asyncio
+import math
 import os
+from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -11,14 +14,17 @@ from fastapi.responses import HTMLResponse
 
 from .archive_api import create_archive_router
 from .archives import ArchiveInbox
+from .azure_blob_snapshot import configured_blob_snapshot
 from .azure_credentials import AzureKeyVaultCredentialStore
 from .bootstrap import BootstrapCoordinator
 from .connections import ConnectionStore
 from .connections_api import create_connections_router
 from .delegated_auth import SPECS, DelegatedAuthorization, DelegatedProvider
+from .fenced_http import FencedHttpGate
 from .github_auth import GitHubAuthorization
 from .github_provider import GitHubProvider
 from .instance_auth import InstanceAuth
+from .leased_snapshot import LeasedSnapshot
 from .oauth_state import DurableAuthorizationStateStore
 from .private_api import protect
 from .provider_registry import ProviderRegistry
@@ -41,8 +47,12 @@ class ApplicationSettings:
     spotify_client_secret: str = ""
     spotify_redirect_uri: str = ""
     database_snapshot: str | None = None
+    blob_snapshot_url: str = ""
+    blob_identity_client_id: str = ""
     archive_dir: str = "data/archives"
     archive_max_bytes: int = 50 * 1024 * 1024 * 1024
+    body_idle_timeout: float = 120.0
+    body_max_duration: float | None = None
 
     @classmethod
     def from_env(cls) -> ApplicationSettings:
@@ -53,6 +63,7 @@ class ApplicationSettings:
         missing = [name for name, value in required.items() if not value]
         if missing:
             raise RuntimeError(f"missing application settings: {', '.join(missing)}")
+        raw_max_duration = os.getenv("TPA_BODY_MAX_DURATION", "")
         return cls(
             **required,
             key_vault_url=os.getenv("TPA_KEY_VAULT_URL", ""),
@@ -65,10 +76,14 @@ class ApplicationSettings:
             spotify_client_secret=os.getenv("TPA_SPOTIFY_CLIENT_SECRET", ""),
             spotify_redirect_uri=os.getenv("TPA_SPOTIFY_REDIRECT_URI", ""),
             database_snapshot=os.getenv("TPA_DATABASE_SNAPSHOT"),
+            blob_snapshot_url=os.getenv("TPA_BLOB_SNAPSHOT_URL", ""),
+            blob_identity_client_id=os.getenv("TPA_BLOB_IDENTITY_CLIENT_ID", ""),
             archive_dir=os.getenv("TPA_ARCHIVE_DIR", "data/archives"),
             archive_max_bytes=int(
                 os.getenv("TPA_ARCHIVE_MAX_BYTES", str(50 * 1024 * 1024 * 1024))
             ),
+            body_idle_timeout=float(os.getenv("TPA_BODY_IDLE_TIMEOUT", "120.0")),
+            body_max_duration=float(raw_max_duration) if raw_max_duration else None,
         )
 
 
@@ -95,10 +110,21 @@ def _build_github(settings, store, credentials, github_http, oauth_http):
     return github, registry, github_auth
 
 
-def _build_services(settings: ApplicationSettings, credentials, github_http, oauth_http):
+def _build_services(settings: ApplicationSettings, credentials, github_http, oauth_http,
+                    leased_snapshot: LeasedSnapshot | None = None):
     database_path = Path(settings.database)
     database_path.parent.mkdir(parents=True, exist_ok=True)
-    store = Store(database_path, snapshot_path=settings.database_snapshot)
+    store = Store(database_path, snapshot_path=settings.database_snapshot,
+                  leased_snapshot=leased_snapshot)
+    try:
+        return _build_services_for_store(settings, store, credentials, github_http, oauth_http)
+    except Exception:
+        if leased_snapshot is not None:
+            store.connection.close()
+        raise
+
+
+def _build_services_for_store(settings, store, credentials, github_http, oauth_http):
     connection_store = ConnectionStore(store)
     bootstrap = BootstrapCoordinator(store)
     archive_inbox = ArchiveInbox(
@@ -207,13 +233,42 @@ def create_private_app(
     github_http=None,
     oauth_http=None,
     youtube_http=None,
+    leased_snapshot: LeasedSnapshot | None = None,
+    body_idle_timeout: float | None = None,
 ) -> FastAPI:
-    services = _build_services(settings, credentials, github_http, oauth_http)
+    idle_timeout = settings.body_idle_timeout if body_idle_timeout is None else body_idle_timeout
+    max_duration = settings.body_max_duration
+    if leased_snapshot is not None:
+        if not math.isfinite(idle_timeout) or idle_timeout <= 0:
+            raise ValueError("body idle timeout must be positive and finite")
+        if max_duration is not None and (not math.isfinite(max_duration) or max_duration <= 0):
+            raise ValueError("body max duration must be positive and finite")
+    services = _build_services(settings, credentials, github_http, oauth_http, leased_snapshot)
+
+    @asynccontextmanager
+    async def lifespan(_app):
+        try:
+            yield
+        finally:
+            if leased_snapshot is not None:
+                await asyncio.to_thread(services[0].connection.close)
+
     app = FastAPI(
         title="The Personal Algorithm", version="0.1.0",
         docs_url=None, redoc_url=None, openapi_url=None,
+        lifespan=lifespan,
     )
+    app.state.store = services[0]
     _include_private_routers(app, settings, services, youtube_http)
+    if leased_snapshot is not None:
+        app.add_middleware(
+            FencedHttpGate,
+            verify=services[0].connection.check_available,
+            cleanup=services[0].connection.finish_request,
+            check_complete=services[0].connection.finish_request,
+            body_idle_timeout=idle_timeout,
+            body_max_duration=max_duration,
+        )
 
     @app.get("/", response_class=HTMLResponse)
     def landing() -> str:
@@ -229,4 +284,18 @@ def create_private_app(
 def app_from_env() -> FastAPI:
     if os.getenv("TPA_TRUSTED_HOST_AUTH") != "azure-container-apps-easy-auth":
         raise RuntimeError("hosted application requires TPA_TRUSTED_HOST_AUTH=azure-container-apps-easy-auth")
-    return create_private_app(ApplicationSettings.from_env())
+    settings = ApplicationSettings.from_env()
+    if not settings.blob_snapshot_url and not settings.blob_identity_client_id:
+        return create_private_app(settings)
+    if (not settings.blob_snapshot_url or not settings.blob_identity_client_id
+            or settings.database_snapshot):
+        raise RuntimeError("Blob snapshot requires its URL and identity, without a file snapshot")
+    snapshot = configured_blob_snapshot(settings.blob_snapshot_url, settings.blob_identity_client_id)
+    try:
+        return create_private_app(settings, leased_snapshot=snapshot)
+    except Exception:
+        try:
+            snapshot.close()
+        except Exception:  # noqa: BLE001, S110 - preserve the startup failure
+            pass
+        raise

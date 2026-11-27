@@ -19,6 +19,8 @@ from .json_array_stream import iter_json_array, iter_json_array_text
 from .models import PersonalEvent
 from .store import Store
 
+MAX_UNSUPPORTED_JSON_BYTES = 16 * 1024 * 1024
+
 
 @dataclass(frozen=True, slots=True)
 class SpotifyImportSummary:
@@ -47,8 +49,7 @@ def import_spotify_history(
         for member_name, open_member, binary in _json_members(path):
             files_scanned += 1
             if not _is_array(open_member, binary):
-                with open_member() as stream:
-                    json.load(stream)
+                _validate_unsupported_json(open_member, binary)
                 unsupported += 1
                 continue
             with tempfile.TemporaryDirectory(prefix="spotify-import-") as directory:
@@ -102,6 +103,25 @@ def _json_members(path: Path):
         return
     if path.suffix.lower() == ".json":
         yield path.name, lambda: path.open(encoding="utf-8"), False
+
+
+def _validate_unsupported_json(
+    open_member, binary: bool, *, max_bytes: int | None = None,
+) -> None:
+    limit = MAX_UNSUPPORTED_JSON_BYTES if max_bytes is None else max_bytes
+    if limit <= 0:
+        raise ValueError("unsupported JSON limit must be positive")
+    chunks: list[bytes] | list[str] = []
+    total = 0
+    with open_member() as stream:
+        while chunk := stream.read(65536):
+            size = len(chunk) if binary else len(chunk.encode("utf-8"))
+            total += size
+            if total > limit:
+                raise ValueError("unsupported Spotify JSON member exceeds size limit")
+            chunks.append(chunk)
+    raw = b"".join(chunks) if binary else "".join(chunks)
+    json.loads(raw)
 
 
 def _is_array(open_member, binary: bool) -> bool:

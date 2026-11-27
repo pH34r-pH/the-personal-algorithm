@@ -10,11 +10,14 @@ import sqlite3
 import tempfile
 import threading
 import time
+import weakref
 from contextlib import closing
 from pathlib import Path
 from typing import Any
 
+from .leased_snapshot import LeasedSnapshot, SnapshotUnavailable
 from .models import Candidate, Interaction, PersonalEvent, RankedCandidate
+from .snapshot_validation import validate_snapshot
 
 SCHEMA = """
 PRAGMA foreign_keys = ON;
@@ -121,41 +124,152 @@ def _restore_snapshot(database: Path, snapshot: Path | None) -> None:
         staged.unlink(missing_ok=True)
 
 
+def _restore_leased_snapshot(database: Path, snapshot: LeasedSnapshot) -> None:
+    """Restore only into an empty local path, preserving any recovery evidence."""
+    database.parent.mkdir(parents=True, exist_ok=True)
+    if any(Path(str(database) + suffix).exists() for suffix in ("", "-wal", "-shm", "-journal")):
+        raise SnapshotUnavailable("local database or journal already exists; recovery required")
+    fd, name = tempfile.mkstemp(prefix=".restore-", suffix=".sqlite3", dir=database.parent)
+    staged = Path(name)
+    try:
+        with os.fdopen(fd, "wb") as output:
+            snapshot.download(output)
+        validate_snapshot(staged)
+        snapshot.verify()
+        # Hard-link creation fails if another file appeared at the target.
+        os.link(staged, database)
+    finally:
+        staged.unlink(missing_ok=True)
+
+
+class _FencedCursor:
+    """Do not return buffered SQLite results after observing lease loss."""
+
+    def __init__(self, cursor: sqlite3.Cursor, connection: _DurableConnection) -> None:
+        self._cursor = cursor
+        self._connection = connection
+
+    def _fetch(self, name: str, *args):
+        with self._connection._lock:
+            self._connection._check()
+            result = getattr(self._cursor, name)(*args)
+            self._connection._check()
+            return result
+
+    def fetchone(self):
+        return self._fetch("fetchone")
+
+    def fetchmany(self, *args):
+        return self._fetch("fetchmany", *args)
+
+    def fetchall(self):
+        return self._fetch("fetchall")
+
+    def close(self) -> None:
+        with self._connection._lock:
+            self._cursor.close()
+
+    def __iter__(self):
+        while (row := self.fetchone()) is not None:
+            yield row
+
+    @property
+    def rowcount(self):
+        with self._connection._lock:
+            self._connection._check()
+            return self._cursor.rowcount
+
+
 class _DurableConnection:
-    def __init__(self, connection: sqlite3.Connection, snapshot: Path | None) -> None:
+    def __init__(self, connection: sqlite3.Connection, snapshot: Path | None,
+                 leased_snapshot: LeasedSnapshot | None = None) -> None:
         self._connection = connection
         self._snapshot = snapshot
+        self._leased_snapshot = leased_snapshot
+        self._failed = False
         self._lock = threading.RLock()
+        self._cursors: weakref.WeakSet[_FencedCursor] = weakref.WeakSet()
 
     def __getattr__(self, name: str) -> Any:
+        if self._leased_snapshot is not None and name != "in_transaction":
+            raise AttributeError(f"{name} is not available on a fenced connection")
         return getattr(self._connection, name)
+
+    def _check(self) -> None:
+        if self._failed:
+            raise SnapshotUnavailable("local state requires recovery")
+        if self._leased_snapshot is not None:
+            self._leased_snapshot.verify()
+        if self._failed:
+            raise SnapshotUnavailable("local state requires recovery")
+
+    def check_available(self) -> None:
+        """Check snapshot and local-failure state without waiting on a request."""
+        self._check()
 
     def execute(self, *args, **kwargs):
         with self._lock:
-            return self._connection.execute(*args, **kwargs)
+            self._check()
+            cursor = self._connection.execute(*args, **kwargs)
+            if self._leased_snapshot is not None:
+                self._check()
+                fenced = _FencedCursor(cursor, self)
+                self._cursors.add(fenced)
+                return fenced
+            return cursor
 
     def executemany(self, *args, **kwargs):
         with self._lock:
-            return self._connection.executemany(*args, **kwargs)
+            self._check()
+            cursor = self._connection.executemany(*args, **kwargs)
+            if self._leased_snapshot is not None:
+                self._check()
+                fenced = _FencedCursor(cursor, self)
+                self._cursors.add(fenced)
+                return fenced
+            return cursor
 
     def executescript(self, *args, **kwargs):
         with self._lock:
+            if self._leased_snapshot is not None:
+                raise SnapshotUnavailable("executescript is unsafe on a fenced connection")
             return self._connection.executescript(*args, **kwargs)
 
     def commit(self) -> None:
         with self._lock:
-            self._connection.commit()
-            if self._snapshot is not None:
-                self._write_snapshot()
+            self._check()
+            try:
+                self._connection.commit()
+                if self._snapshot is not None or self._leased_snapshot is not None:
+                    self._write_snapshot()
+            except Exception:
+                if self._leased_snapshot is not None:
+                    self._failed = True
+                raise
 
     def rollback(self) -> None:
         with self._lock:
             self._connection.rollback()
 
+    def finish_request(self) -> None:
+        """Reject an unfinished transaction, retaining committed recovery data."""
+        with self._lock:
+            if self._connection.in_transaction:
+                self._connection.rollback()
+                raise SnapshotUnavailable("request ended with an unfinished transaction")
+
+    def close(self) -> None:
+        with self._lock:
+            for cursor in list(self._cursors):
+                cursor.close()
+            self._connection.close()
+            if self._leased_snapshot is not None:
+                self._leased_snapshot.close()
+
     def _write_snapshot(self) -> None:
         snapshot = self._snapshot
-        assert snapshot is not None
-        snapshot.parent.mkdir(parents=True, exist_ok=True)
+        if snapshot is not None:
+            snapshot.parent.mkdir(parents=True, exist_ok=True)
 
         fd, local_name = tempfile.mkstemp(prefix="personal-algorithm-", suffix=".sqlite3")
         os.close(fd)
@@ -168,6 +282,10 @@ class _DurableConnection:
                 backup.commit()
             finally:
                 backup.close()
+            if self._leased_snapshot is not None:
+                self._leased_snapshot.publish(local_copy)
+                return
+            assert snapshot is not None
             remote_fd, remote_name = tempfile.mkstemp(
                 prefix=f".{snapshot.name}.", suffix=".tmp", dir=snapshot.parent
             )
@@ -189,14 +307,33 @@ class Store:
         path: str | Path = ":memory:",
         *,
         snapshot_path: str | Path | None = None,
+        leased_snapshot: LeasedSnapshot | None = None,
     ) -> None:
         database_path = Path(path) if str(path) != ":memory:" else None
         snapshot = Path(snapshot_path) if snapshot_path else None
-        if database_path is not None:
+        if leased_snapshot is not None:
+            if database_path is None or snapshot is not None:
+                raise ValueError("fenced snapshots require a local path and no file snapshot")
+            leased_snapshot.start()
+            try:
+                _restore_leased_snapshot(database_path, leased_snapshot)
+            except Exception:
+                leased_snapshot.close()
+                raise
+        elif database_path is not None:
             _restore_snapshot(database_path, snapshot)
-        raw_connection = sqlite3.connect(str(path), timeout=30.0, check_same_thread=False)
-        _initialize_schema(raw_connection)
-        self.connection = _DurableConnection(raw_connection, snapshot)
+        try:
+            raw_connection = sqlite3.connect(str(path), timeout=30.0, check_same_thread=False)
+            try:
+                _initialize_schema(raw_connection)
+            except Exception:
+                raw_connection.close()
+                raise
+        except Exception:
+            if leased_snapshot is not None:
+                leased_snapshot.close()
+            raise
+        self.connection = _DurableConnection(raw_connection, snapshot, leased_snapshot)
 
     def put_candidate(self, candidate: Candidate) -> None:
         payload = {

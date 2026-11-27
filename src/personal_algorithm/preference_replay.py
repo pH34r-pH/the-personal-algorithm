@@ -28,6 +28,7 @@ from .serialization import candidate_from_dict, interaction_from_dict, policy_fr
 REDUCER = "explicit-topic-feedback-v1"
 INPUT_FIELDS = {"schema_version", "evaluated_at", "starting_policy", "candidates",
                 "interactions", "affinity_step"}
+INPUT_FIELDS_BY_VERSION = {1: INPUT_FIELDS, 2: INPUT_FIELDS | {"source_use_sha256"}}
 EVENT_FIELDS = {"event_id", "policy_sha256", "origin", "candidate_id", "kind",
                 "occurred_at", "explicit"}
 CHECKPOINT_FIELDS = {"schema_version", "reducer", "input_sha256", "processed", "topic_deltas"}
@@ -116,12 +117,25 @@ class _FrozenReplay:
     source_use_sha256: str | None
 
 
+def _review_source_inputs(bound_pin, source_use, source_use_sha256, candidates, events, when) -> str:
+    if source_use is None or source_use_sha256 is None or bound_pin != source_use_sha256:
+        raise ValueError("Governed replay requires the independently reviewed source-use pin")
+    reviewed = _pinned_object(source_use, source_use_sha256)
+    members = {
+        ReplaySourceInput("candidate", candidate.source, candidate.source_id, snapshot.sha256)
+        for candidate, snapshot in candidates
+    }
+    members.update(ReplaySourceInput("interaction", event["origin"], event["event_id"], _digest(_json(event)))
+                   for event in events)
+    verify_replay_source_use(reviewed, members, when=when)
+    return source_use_sha256
+
+
 def _prepare_replay(document: dict, source_use: bytes | None, source_use_sha256: str | None) -> _FrozenReplay:
     version = document.get("schema_version") if isinstance(document, dict) else None
-    if type(version) is not int or version not in (1, 2):
+    if type(version) is not int or version not in INPUT_FIELDS_BY_VERSION:
         raise ValueError("Unsupported frozen replay input version")
-    source_field = {"source_use_sha256"} if version == 2 else set()
-    data = _object(document, INPUT_FIELDS | source_field, "frozen replay input")
+    data = _object(document, INPUT_FIELDS_BY_VERSION[version], "frozen replay input")
     value = data["evaluated_at"]
     if not isinstance(value, str) or (when := datetime.fromisoformat(value)).utcoffset() is None:
         raise ValueError("Frozen evaluation time must include a timezone")
@@ -138,17 +152,10 @@ def _prepare_replay(document: dict, source_use: bytes | None, source_use_sha256:
         raise ValueError("Affinity step must be positive")
     binding = {}
     if version == 2:
-        if source_use is None or source_use_sha256 is None or data["source_use_sha256"] != source_use_sha256:
-            raise ValueError("Governed replay requires the independently reviewed source-use pin")
-        reviewed = _pinned_object(source_use, source_use_sha256)
-        members = {
-            ReplaySourceInput("candidate", candidate.source, candidate.source_id, snapshot.sha256)
-            for candidate, snapshot in zip(candidates, snapshots, strict=True)
-        }
-        members.update(ReplaySourceInput("interaction", event["origin"], event["event_id"], _digest(_json(event)))
-                       for event in events)
-        verify_replay_source_use(reviewed, members, when=when)
-        binding["source_use_sha256"] = source_use_sha256
+        binding["source_use_sha256"] = _review_source_inputs(
+            data["source_use_sha256"], source_use, source_use_sha256,
+            zip(candidates, snapshots, strict=True), events, when,
+        )
     elif source_use is not None or source_use_sha256 is not None:
         raise ValueError("Source-use verification requires the governed replay format")
     baseline = create_ranking_run(candidates, policy, now=when)

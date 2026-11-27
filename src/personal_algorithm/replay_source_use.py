@@ -66,32 +66,35 @@ def _check_decision(action, record, member, policy, evaluator, caller, when):
     request, decision = record["request"], record["decision"]
     if not isinstance(request, dict) or not isinstance(decision, dict):
         raise TypeError("Source-use request and decision must be JSON objects")
-    if (
-        request.get("action") != action or request.get("resource_id") != member.resource_id
-        or request.get("caller_id") != caller or not _text(request.get("request_id"))
-        or _source_time(request.get("now")) != when
-    ):
+    observed_context = (
+        request.get("action"), request.get("resource_id"),
+        request.get("caller_id"), _source_time(request.get("now")),
+    )
+    if observed_context != (action, member.resource_id, caller, when) or not _text(request.get("request_id")):
         raise ValueError("Source-use request differs from the reviewed replay action and context")
-    if (
-        decision.get("resource_id") != member.resource_id
-        or decision.get("request_id") != request["request_id"]
-        or decision.get("request_fingerprint") != _request_fingerprint(request)
-        or decision.get("policy_fingerprint") != policy
-        or decision.get("evaluator_implementation") != evaluator
-        or not _text(decision.get("policy_id"))
-        or _source_time(decision.get("evaluated_at")) != when
-        or decision.get("status") not in _STATUSES
-    ):
+    expected_decision = {
+        "resource_id": member.resource_id, "request_id": request["request_id"],
+        "request_fingerprint": _request_fingerprint(request), "policy_fingerprint": policy,
+        "evaluator_implementation": evaluator,
+    }
+    if (any(decision.get(key) != value for key, value in expected_decision.items())
+            or not _text(decision.get("policy_id")) or _source_time(decision.get("evaluated_at")) != when
+            or decision.get("status") not in _STATUSES):
         raise ValueError("Source-use decision differs from the exact request, policy, or evaluator")
-    if action == "evaluate":
-        permissions = decision.get("matched_permissions")
-        if (
-            request.get("purpose") != REPLAY_PURPOSE or request.get("audience_id") != "private"
-            or decision["status"] != "ALLOW"
-            or decision.get("unsatisfied_duties") != [] or decision.get("matched_prohibitions") != []
-            or not isinstance(permissions, list) or not permissions or not all(map(_text, permissions))
-        ):
-            raise ValueError("Source-use policy must explicitly allow constrained preference evaluation")
+    if action == "evaluate" and not _allows_private_evaluation(request, decision):
+        raise ValueError("Source-use policy must explicitly allow constrained preference evaluation")
+
+
+def _allows_private_evaluation(request, decision) -> bool:
+    permissions = decision.get("matched_permissions")
+    return (
+        request.get("purpose") == REPLAY_PURPOSE
+        and request.get("audience_id") == "private"
+        and decision["status"] == "ALLOW"
+        and decision.get("unsatisfied_duties") == []
+        and decision.get("matched_prohibitions") == []
+        and isinstance(permissions, list) and bool(permissions) and all(map(_text, permissions))
+    )
 
 
 def _source_row(row, remaining: set[ReplaySourceInput], evaluator, caller, when) -> None:

@@ -15,6 +15,8 @@ from starlette.requests import ClientDisconnect
 
 from .leased_snapshot import SnapshotUnavailable
 
+_Check = Callable[[], None]
+
 
 class _DisconnectableReceive:
     def __init__(self, receive, idle_timeout: float, max_duration: float | None = None):
@@ -79,8 +81,8 @@ class _RequestBodyTimeout(Exception):
 class FencedHttpGate:
     """Serialize HTTP requests, check the lease, and roll back unfinished work."""
 
-    def __init__(self, app: Any, verify: Callable[[], None], cleanup: Callable[[], None],
-                 check_complete: Callable[[], None] | None = None,
+    def __init__(self, app: Any, *, verify: _Check, cleanup: _Check,
+                 check_complete: _Check | None = None,
                  body_idle_timeout: float = 120.0,
                  body_max_duration: float | None = None):
         if not math.isfinite(body_idle_timeout) or body_idle_timeout <= 0:
